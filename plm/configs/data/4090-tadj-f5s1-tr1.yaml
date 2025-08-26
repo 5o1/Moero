@@ -1,0 +1,10 @@
+data:
+  class_path: plm.datasets.CmrInferenceDataModule
+  init_args:
+    src_path: /home/hulabdl/exp/TaskR1_h5/
+    num_workers: 8
+    dataset_class: datasets.Cmr25InferenceDataset
+    dataset_init_args:
+      n_adj_frame: 5
+      n_adj_slice: 1
+      which_adj: frame  # Options: "frame", "slice"

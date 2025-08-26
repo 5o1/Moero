@@ -1,0 +1,16 @@
+seed_everything: 42
+trainer:
+  accelerator: gpu
+  precision: 32
+  devices: [1, 2, 3]
+  num_nodes: 1
+  max_epochs: 1
+  deterministic: false
+  use_distributed_sampler: false # Use false because custom VolumeSamplers have been used
+  logger: False
+  callbacks:
+    - class_path: plm.callbacks.CmrWriter
+      init_args:
+        output_dir: /home/hulabdl/exp/taskr1out/vqvarnet-debug/
+    - class_path: plm.callbacks.progbar.MultiColumnRichProgressBar # Configure this term in plm/callbacks/progbar.py
+

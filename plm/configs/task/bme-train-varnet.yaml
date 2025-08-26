@@ -1,0 +1,38 @@
+seed_everything: 42
+trainer:
+  accelerator: gpu
+  precision: 32
+  strategy: ddp
+  devices: [0, 1, 2, 3, 4, 5, 6, 7] # Use all available GPUs
+  # accumulate_grad_batches: 2
+  num_nodes: 1
+  max_epochs: 17
+  log_every_n_steps: 50 # log every n steps during training
+  deterministic: false
+  use_distributed_sampler: false # Use false because custom VolumeSamplers have been used
+  logger: 
+    class_path: pytorch_lightning.loggers.WandbLogger
+    init_args:
+      project: cmr25
+      mode: offline
+      save_dir: /home_data/home/liyuyang/data2/exp
+      tags: [cmr25lab, varnet]
+      name: varnet-12
+  callbacks:
+    - class_path: pytorch_lightning.callbacks.ModelCheckpoint
+      init_args:
+        monitor: validation_loss
+        mode: min 
+        save_top_k: 1 # -1 to save all checkpoints, 5 to save the top 5 checkpoints
+        save_last: True # always save the last checkpoint
+    - class_path: wandb_osh.lightning_hooks.TriggerWandbSyncLightningCallback
+    - class_path: plm.callbacks.progbar.MultiColumnRichProgressBar # Configure this term in plm/callbacks/progbar.py
+    - class_path: plm.callbacks.MatmulPrecisionCallback
+      init_args:
+        precision: "high"  # Set to "high" for high precision matmul operations
+    - class_path: pytorch_lightning.callbacks.LearningRateMonitor
+    - class_path: plm.callbacks.TrainingCheckpoint
+      init_args:
+        every_n_minites: 30
+
+ 

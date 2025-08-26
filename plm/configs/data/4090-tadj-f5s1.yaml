@@ -1,0 +1,23 @@
+data:
+  class_path: plm.datasets.CmrDataModule
+  init_args:
+    train_path: /home/hulabdl/CMRxRecon2025/maxsplitset/train
+    val_paths:
+      - /home/hulabdl/CMRxRecon2025/maxsplitset/val
+    num_workers: 4
+    dataset_class: datasets.Cmr25TrainingDataset
+    dataset_init_args:
+      n_adj_frame: 5
+      n_adj_slice: 1
+      which_adj: frame  # Options: "frame", "slice"
+      transform: 
+        class_path: datasets.Cmr25TrainingTransform
+        init_args: {
+          acc_factors: [4, 8, 10, 12, 16, 20, 24],
+          n_calibs: [16, 20],
+        }
+      balance_sampler:
+        class_path: datasets.AtSplitedBalanceSampler
+        init_args:
+          max_weight: 8
+          momentum: 0.7

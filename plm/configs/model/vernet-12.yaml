@@ -1,0 +1,95 @@
+model:
+  class_path: plm.models.Cmr25Module
+  init_args:
+
+    optimizer_init_kwargs:
+      lr: 0.0002
+      weight_decay: 1e-2
+
+    model:
+      class_path: models.Varnet
+      init_args:
+        senseblock_kwargs:
+          use_noise: true
+        csmblock_kwargs:
+          crop: false
+
+        csm_model:
+          class_path: models.PromptUnet
+          init_args:
+            in_channels: 10
+            out_channels: 10
+            pyramid_channels: [24, 36, 48, 60]
+            prompt_tokens: [8, 8, 8]
+            prompt_channels: [12, 24, 36]
+            prompt_figsize: [64, 32, 16]
+            n_enc_cab: [2, 3, 3]
+            n_dec_cab: [2, 2, 3]
+            n_skip_cab: [1, 1, 1, 3]
+            reduction: 1
+            norm: false
+            bias: false
+            idx_cascade: null
+            
+        cascades: 
+          - class_path: models.PromptUnet
+            init_args: &cascadebase
+              in_channels: 50
+              out_channels: 50
+              pyramid_channels: [48, 72, 96, 120]
+              prompt_tokens: [8, 8, 8]
+              prompt_channels: [24, 48, 72]
+              prompt_figsize: [64, 32, 16]
+              n_enc_cab: [2, 3, 3]
+              n_dec_cab: [2, 2, 3]
+              n_skip_cab: [1, 1, 1, 3]
+              reduction: 1
+              n_history: 12
+              norm: false
+              bias: false
+              history_norm: false
+              idx_cascade: 0
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 1
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 2
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 3
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 4
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 5
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 6
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 7
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 8
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 9
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 10
+          - class_path: models.PromptUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 11
