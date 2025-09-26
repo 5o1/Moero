@@ -106,7 +106,7 @@ class CmrSampleBase(dict):
     
 
 @dataclass
-class Cmr25Sample(CmrSampleBase):
+class CmrSample(CmrSampleBase):
     masked_kspace: torch.Tensor = None
     mask: torch.Tensor = None
     mask_type: str = None
@@ -117,7 +117,7 @@ class Cmr25Sample(CmrSampleBase):
     seqshape: torch.Tensor = None
 
 @dataclass
-class Cmr25ValidationOutputSample(CmrSampleBase):
+class CmrValidationOutputSample(CmrSampleBase):
     img_pred: torch.Tensor = None # b t s c h w
     img_zf: torch.Tensor = None
     csm: torch.Tensor = None
@@ -138,7 +138,7 @@ class Cmr25ValidationOutputSample(CmrSampleBase):
 
 
 @dataclass
-class Cmr25InferenceOutputSample(CmrSampleBase):
+class CmrInferenceOutputSample(CmrSampleBase):
     img_pred: torch.Tensor = None # b t s c h w
     img_zf: torch.Tensor = None
     csm: torch.Tensor = None

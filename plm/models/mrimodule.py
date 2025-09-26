@@ -17,7 +17,7 @@ Change logs:
 
 """
 from collections import defaultdict
-from data.cmrsample import Cmr25ValidationOutputSample, Cmr25Sample
+from data.cmrsample import CmrValidationOutputSample, CmrSample
 
 import pytorch_lightning as pl
 import torch
@@ -94,7 +94,7 @@ class MriModule(pl.LightningModule):
     def log_image(self, key, images, captions):
         self.logger.log_image(key, images, caption=captions, step=self.global_step) # wandb
 
-    def on_validation_batch_end(self, outputs: Cmr25ValidationOutputSample, batch: Cmr25Sample, batch_idx: int, dataloader_idx: int = 0):
+    def on_validation_batch_end(self, outputs: CmrValidationOutputSample, batch: CmrSample, batch_idx: int, dataloader_idx: int = 0):
         outputs = outputs.to("cpu")
         batch = batch.to("cpu")
         

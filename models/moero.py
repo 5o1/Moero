@@ -357,7 +357,7 @@ class Moero(nn.Module):
 
             except torch.cuda.OutOfMemoryError as e:
                 raise torch.cuda.OutOfMemoryError(
-                    f"Out of memory in cascade {cascade_idx}. Consider reducing cascade size."
+                    f"Out of memory in cascade {cascade_idx}. Input shape = {masked_kspace.shape}. Consider reducing cascades or datasize."
                 ) from e
             
             for ilevel, level_history in enumerate(feat_history):

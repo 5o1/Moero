@@ -14,3 +14,7 @@ from .volumesampler import(
 from .cmr25inference import (
     Cmr25InferenceDataset
 )
+
+from .fastmritraining import(
+    FastMriTrainingDataset,
+)

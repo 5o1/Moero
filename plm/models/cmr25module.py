@@ -1,7 +1,7 @@
 import torch
 from typing import Literal
 from data.transforms.crop import center_crop_to_smallest
-from data.cmrsample import Cmr25Sample, Cmr25ValidationOutputSample, Cmr25InferenceOutputSample
+from data.cmrsample import CmrSample, CmrValidationOutputSample, CmrInferenceOutputSample
 from .mrimodule import MriModule
 from utils.naneu.nn.modules.loss import SSIMLoss, VGGLoss
 from utils.naneu.common.importlib import LazyModule
@@ -53,7 +53,7 @@ class Cmr25Module(MriModule):
         output_dict = self.model(masked_kspace, mask)
         return output_dict
 
-    def training_step(self, batch: Cmr25Sample, batch_idx: int):
+    def training_step(self, batch: CmrSample, batch_idx: int):
         if not torch.isfinite(batch.masked_kspace).all():
             raise ValueError(f"Invalid masked_kspace in batch {batch_idx}")
 
@@ -88,7 +88,7 @@ class Cmr25Module(MriModule):
 
         return total_loss
 
-    def validation_step(self, batch: Cmr25Sample, batch_idx: int, dataloader_idx: int = 0):
+    def validation_step(self, batch: CmrSample, batch_idx: int, dataloader_idx: int = 0):
         if not torch.isfinite(batch.masked_kspace).all():
             raise ValueError(f"Invalid masked_kspace in batch {batch_idx}")
         
@@ -115,7 +115,7 @@ class Cmr25Module(MriModule):
                 for metric_name, metric_score in ctx_metric_dict.items():
                     self.log(f"val_{metric_name}", metric_score.detach(), prog_bar=True, sync_dist=True)
 
-        return Cmr25ValidationOutputSample(
+        return CmrValidationOutputSample(
             img_pred=output,
             img_zf=img_zf,
             csm=csm,
@@ -125,7 +125,7 @@ class Cmr25Module(MriModule):
             dataloader_idx = dataloader_idx,
         )
 
-    def predict_step(self, batch: Cmr25Sample, batch_idx: int, dataloader_idx=0):
+    def predict_step(self, batch: CmrSample, batch_idx: int, dataloader_idx=0):
         if not torch.isfinite(batch.masked_kspace).all():
             raise ValueError(f"Invalid masked_kspace in batch {batch_idx}")
         
@@ -134,7 +134,7 @@ class Cmr25Module(MriModule):
         slicedata = slicedata[0, slicedata.size(1) // 2, slicedata.size(2) // 2]
         if (slicedata == 0).all() or not slicedata.isfinite().all():
             print(f"Zero value input data detected in batch {batch_idx}, fname={batch.fname}, seqidx={batch.seqidx}, seqshape={batch.seqshape}")
-            return Cmr25InferenceOutputSample(
+            return CmrInferenceOutputSample(
                 img_pred=torch.zeros_like(batch.target),
                 img_zf=torch.zeros_like(batch.target),
                 csm=torch.zeros_like(batch.target).expand(-1, batch.masked_kspace.size(-3), -1, -1),
@@ -154,7 +154,7 @@ class Cmr25Module(MriModule):
             if output.isnan().any():
                 print(f"NaN detected in output at fname{batch.fname}, seqidx={batch.seqidx}, seqshape={batch.seqshape}")
             
-        return Cmr25InferenceOutputSample(
+        return CmrInferenceOutputSample(
             img_pred=output,
             img_zf=img_zf,
             csm=csm,

@@ -18,7 +18,7 @@ model:
         branchnav:
           class_path: models.modules.nav.KmeansBranchNav
           init_args:
-            in_channels: &word_length 1024
+            in_channels: &nvqtoken 1024
             n_components: *nbranch
             buffer_maxsize: 2048
             buffer_nskip: 7000
@@ -30,7 +30,7 @@ model:
             in_channels: 10
             out_channels: 10
             pyramid_channels: [20, 30, 40, 50]
-            prompt_tokens: [8, 8, 8, *word_length]
+            prompt_tokens: [8, 8, 8, *nvqtoken]
             prompt_channels: [10, 16, 24, 30]
             prompt_figsize: [64, 32, 16]
             n_enc_cab: [2, 3, 3]
@@ -47,7 +47,7 @@ model:
               in_channels: 50
               out_channels: 50
               pyramid_channels: [40, 60, 80, 100]
-              prompt_tokens: [8, 8, 8, *word_length]
+              prompt_tokens: [8, 8, 8, *nvqtoken]
               prompt_channels: [20, 40, 60, 60]
               prompt_figsize: [64, 32, 16]
               n_enc_cab: [2, 3, 3]

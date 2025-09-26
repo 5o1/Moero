@@ -8,78 +8,17 @@ import math
 import numpy as np
 from glob import glob
 from einops import rearrange
-from data.transforms.maskgenerator import UniformMaskGenerator, KtGaussianMaskGenerator, KtRadialMaskGenerator
 
-
-class MixedRandomMaskGenerator(torch.nn.Module):
-    def __init__(
-            self,
-            acc_factors: List[int] = [2, 4, 8, 12, 16, 20, 24],
-            n_calibs: List[int] = [16, 20],
-    ):
-        super().__init__()
-        self.rng = torch.Generator()
-        self.rng.manual_seed(torch.initial_seed())
-        self.maskgen_pool = [
-            UniformMaskGenerator(accel_factors=acc_factors, ncalibs = n_calibs, rng = self.rng),
-            KtGaussianMaskGenerator(accel_factors=acc_factors, ncalibs = n_calibs, rng = self.rng),
-            KtRadialMaskGenerator(accel_factors=acc_factors, ncalibs = n_calibs, rng = self.rng),
-        ]
-        self.maskgen_weights = torch.as_tensor([
-            1,
-            1,
-            1,
-        ], dtype=torch.float32)
-        self.masktype_pool = [
-            "Uniform",
-            "ktGaussian",
-            "ktRadial"
-        ]
-    def set_seed(self, seed: int):
-        self.rng.manual_seed(seed)
-
-    def forward(self, size: Sequence[int]) -> torch.Tensor:
-        idx = torch.multinomial(self.maskgen_weights, num_samples=1, generator = self.rng).item()
-        maskgen = self.maskgen_pool[idx]
-        masktype = self.masktype_pool[idx]
-
-        mask, accel_factor, ncalib = maskgen(size)
-        masktype = self.masktype_pool[idx] + str(accel_factor)
-        return mask, masktype
-
-
-class Cmr25TrainingTransform(torch.nn.Module):
-    def __init__(
-            self,
-            acc_factors: List[int] = [2, 4, 8, 12, 16, 20, 24],
-            n_calibs: List[int] = [16, 20],
-            ):
-        super().__init__()
-        self.maskgen = MixedRandomMaskGenerator(acc_factors, n_calibs)
-
-    def set_seed(self, seed: int):
-        self.maskgen.set_seed(seed)
-    
-    def forward(self, sample: CmrSample) -> CmrSample:
-        size = (sample.masked_kspace.size(0), sample.masked_kspace.size(-2), sample.masked_kspace.size(-1))
-        mask, masktype = self.maskgen(size) # (batch, phase, readout)
-
-        mask = rearrange(mask, "t readout phase -> t 1 1 readout phase")  # Add channel dimension
-
-        sample.masked_kspace = sample.masked_kspace * mask # Apply mask to k-space data
-        sample.mask = mask
-        sample.mask_type = masktype
-        return sample
-
-class Cmr25TrainingDataset(torch.utils.data.Dataset):
+class CmrDatasetBase(torch.utils.data.Dataset):
     def __init__(
         self,
         path: PathLike | str,
         transform: torch.nn.Module = None,
-        n_adj_frame: int = 5,
-        n_adj_slice: int = 1,
-        which_adj: Literal["frame", "slice"] = "frame",
-        adj_padding: Literal["circle", "clamp", "mirror", "clone", False] = "clamp",
+        n_adj_frame: int = 1,
+        n_adj_slice: int = 5,
+        adj_strategy: Literal["pad", "clone", "noise"] = "pad",
+        adj_dim: Literal["frame", "slice"] = "slice",
+        adj_padding: Literal["circle", "clamp", "mirror", False] = "clamp",
         balance_sampler: Callable = None,
     ):
         if not isinstance(path, (PathLike, str)):
@@ -92,11 +31,10 @@ class Cmr25TrainingDataset(torch.utils.data.Dataset):
         self.path = path
         self.n_adj_frame = n_adj_frame
         self.n_adj_slice = n_adj_slice
-        self.which_adj = which_adj
+        self.adj_strategy = adj_strategy
+        self.adj_dim = adj_dim
         self.adj_padding = adj_padding
         self.transform = transform
-
-        # self.collate_fn = _collate_fn
 
         # get all the kspace mat files from root, under folder or its subfolders
         self.fnamelist = sorted(list(glob(f"{path}/*.h5")))
@@ -111,8 +49,7 @@ class Cmr25TrainingDataset(torch.utils.data.Dataset):
 
         for fname in self.fnamelist:
             with h5py.File(fname, 'r') as hf:
-                attrs = dict(hf.attrs)
-                shape = torch.as_tensor(attrs['shape'])
+                shape = torch.as_tensor(hf["kspace"].shape)  # slice coil readout phase
 
                 if len(shape) == 5:
                     seqshape = shape[:2]
@@ -128,7 +65,7 @@ class Cmr25TrainingDataset(torch.utils.data.Dataset):
                 else:
                     raise ValueError(f"Unsupported data formats: {fname} with shape {shape}")
 
-    def _get_indices(self, idx: int, length: int, target_length: int, pad: Literal["circle", "clamp", "mirror", False, "clone"] = "clamp") -> List[int]:
+    def _get_indices(self, idx: int, length: int, target_length: int, pad: Literal["circle", "clamp", "mirror", False,] = "clamp") -> List[int]:
         if not 0 <= idx < length:
             raise ValueError(f"Invalid index {idx} for volume with only one time point.")
 
@@ -146,8 +83,6 @@ class Cmr25TrainingDataset(torch.utils.data.Dataset):
 
             indices[low_mask] = -indices[low_mask]
             indices[high_mask] = 2 * length - indices[high_mask] - 2
-        elif pad == "clone":
-            indices = [idx] * target_length
         elif not pad:
             indices = indices[(indices >= 0) & (indices < length)]
         else:
@@ -207,12 +142,12 @@ class Cmr25TrainingDataset(torch.utils.data.Dataset):
                 ti, zi = seqidx
                 nframe, nslice = seqshape[0], seqshape[1]
 
-                n_adj_frame = self.n_adj_frame if self.which_adj == "frame" else min(self.n_adj_frame, nframe) - (min(self.n_adj_frame, nframe) % 2 == 0)
-                n_adj_slice = self.n_adj_slice if self.which_adj == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
+                n_adj_frame = self.n_adj_frame if self.adj_dim == "frame" else min(self.n_adj_frame, nframe) - (min(self.n_adj_frame, nframe) % 2 == 0)
+                n_adj_slice = self.n_adj_slice if self.adj_dim == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
 
                 # Make fixed-length adjoint slice or frame indices.
-                adj_tis = self._get_indices(ti, nframe, n_adj_frame, pad="clamp")
-                adj_sis = self._get_indices(zi, nslice, n_adj_slice, pad="clamp")
+                adj_tis = self._get_indices(ti, nframe, n_adj_frame, pad= self.adj_padding)
+                adj_sis = self._get_indices(zi, nslice, n_adj_slice, pad= self.adj_padding)
 
                 grid_t, grid_s = np.meshgrid(adj_tis, adj_sis, indexing="ij")  # [len(adj_tis), len(adj_sis)]
                 grid_t = grid_t.ravel()
@@ -235,10 +170,10 @@ class Cmr25TrainingDataset(torch.utils.data.Dataset):
                 zi = seqidx[0]
                 nslice = seqshape[0]
 
-                n_adj_frame = self.n_adj_frame if self.which_adj == "frame" else 1
-                n_adj_slice = self.n_adj_slice if self.which_adj == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
+                n_adj_frame = self.n_adj_frame if self.adj_dim == "frame" else 1
+                n_adj_slice = self.n_adj_slice if self.adj_dim == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
 
-                adj_sis = self._get_indices(zi, nslice, self.n_adj_slice, pad="clamp")
+                adj_sis = self._get_indices(zi, nslice, self.n_adj_slice, pad=self.adj_padding)
 
                 kdata = self.np_getitem_complex_batch(kspace, adj_sis)
                 self._check_data(kdata, adj_sis, fname)
@@ -271,7 +206,7 @@ class Cmr25TrainingDataset(torch.utils.data.Dataset):
             with torch.no_grad():
                 sample = self.transform(sample)
 
-        if self.which_adj == "frame":  # transpose t s
+        if self.adj_dim == "frame":  # transpose t s
             sample.masked_kspace = rearrange(sample.masked_kspace, "t s c h w -> s t c h w")
             sample.mask = rearrange(sample.mask, "t s c h w -> s t c h w")
         return sample.precision(32)
