@@ -1,5 +1,4 @@
 from .cmr25training import(
-    Cmr25TrainingDataset,
     Cmr25TrainingTransform
 )
 
@@ -15,6 +14,6 @@ from .cmr25inference import (
     Cmr25InferenceDataset
 )
 
-from .fastmritraining import(
-    FastMriTrainingDataset,
+from .cmrdataset import (
+    CmrDatasetBase,
 )

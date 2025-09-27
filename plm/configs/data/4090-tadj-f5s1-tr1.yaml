@@ -7,4 +7,4 @@ data:
     dataset_init_args:
       n_adj_frame: 5
       n_adj_slice: 1
-      which_adj: frame  # Options: "frame", "slice"
+      adj_dim: frame  # Options: "frame", "slice"

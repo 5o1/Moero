@@ -185,7 +185,7 @@ class SenseBlock(nn.Module):
         return current_img, latent, feat_cached
 
 
-class Varnet(nn.Module):
+class PromptMR(nn.Module):
     """
     Modular Cascaded Reconstruction Network
 
@@ -222,16 +222,6 @@ class Varnet(nn.Module):
         img = (img.abs() ** 2).sum(dim=-3, keepdim=True).sqrt()  # (b, 1, h, w)
         return img
 
-    # def phase_preprocess(self, tensor: torch.Tensor) -> torch.Tensor:
-    #     """
-    #     Preprocess the phase of the tensor by applying a Gaussian blur.
-    #     tensor: (b, ref, adj, c, h, w) complex tensor
-    #     """
-    #     tensor = fft.ktoi(tensor)
-    #     tensor = self.phasefilter(tensor)
-    #     tensor = fft.itok(tensor)
-    #     return tensor
-
     def forward(
         self,
         masked_kspace: torch.Tensor,
@@ -253,10 +243,6 @@ class Varnet(nn.Module):
             raise ValueError(f"Unexpected dtype for mask: {mask.dtype}. Expected a floating-point dtype.")
         if masked_kspace.size(1) % 2 != 1 or masked_kspace.size(2) % 2 != 1:
             raise ValueError(f"Input masked_kspace must have odd number of frames and slices. But got {masked_kspace.size(1)} frames and {masked_kspace.size(2)} slices.")
-
-        # TODO: Because most of the data is dirty and noisy, a phase unwrapping module is needed.
-
-        # register_extra_output(self, "masked_kspace", masked_kspace) # Debug print
 
         csm = self.csm_model(masked_kspace, mask)
 

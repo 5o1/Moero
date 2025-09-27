@@ -1,8 +1,8 @@
 from typing import List, Optional
 import torch
 from torch import nn
-from .modules.conv import DownBlock, CABChain, UpBlock, CAB
-from .modules.prompt import PromptBlock, VQPromptBlock
+from ..modules.conv import DownBlock, CABChain, UpBlock, CAB
+from ..modules.prompt import PromptBlock, VQPromptBlock
 from utils.naneu.helpers.context import register_extra_output, register_extra_loss
 from utils.naneu.helpers.rearrange import TorchModuleForwardHook # Don't touch this import
 from einops import rearrange

@@ -16,9 +16,9 @@ class CmrDatasetBase(torch.utils.data.Dataset):
         transform: torch.nn.Module = None,
         n_adj_frame: int = 1,
         n_adj_slice: int = 5,
-        adj_strategy: Literal["pad", "clone", "noise"] = "pad",
         adj_dim: Literal["frame", "slice"] = "slice",
-        adj_padding: Literal["circle", "clamp", "mirror", False] = "clamp",
+        frame_padding: Literal["circle", "clamp", "mirror", False] = "clamp",
+        slice_padding: Literal["circle", "clamp", "mirror", False] = "clamp",
         balance_sampler: Callable = None,
     ):
         if not isinstance(path, (PathLike, str)):
@@ -31,9 +31,9 @@ class CmrDatasetBase(torch.utils.data.Dataset):
         self.path = path
         self.n_adj_frame = n_adj_frame
         self.n_adj_slice = n_adj_slice
-        self.adj_strategy = adj_strategy
         self.adj_dim = adj_dim
-        self.adj_padding = adj_padding
+        self.frame_padding = frame_padding
+        self.slice_padding = slice_padding
         self.transform = transform
 
         # get all the kspace mat files from root, under folder or its subfolders
@@ -146,8 +146,8 @@ class CmrDatasetBase(torch.utils.data.Dataset):
                 n_adj_slice = self.n_adj_slice if self.adj_dim == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
 
                 # Make fixed-length adjoint slice or frame indices.
-                adj_tis = self._get_indices(ti, nframe, n_adj_frame, pad= self.adj_padding)
-                adj_sis = self._get_indices(zi, nslice, n_adj_slice, pad= self.adj_padding)
+                adj_tis = self._get_indices(ti, nframe, n_adj_frame, pad= self.frame_padding)
+                adj_sis = self._get_indices(zi, nslice, n_adj_slice, pad= self.slice_padding)
 
                 grid_t, grid_s = np.meshgrid(adj_tis, adj_sis, indexing="ij")  # [len(adj_tis), len(adj_sis)]
                 grid_t = grid_t.ravel()
@@ -173,7 +173,7 @@ class CmrDatasetBase(torch.utils.data.Dataset):
                 n_adj_frame = self.n_adj_frame if self.adj_dim == "frame" else 1
                 n_adj_slice = self.n_adj_slice if self.adj_dim == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
 
-                adj_sis = self._get_indices(zi, nslice, self.n_adj_slice, pad=self.adj_padding)
+                adj_sis = self._get_indices(zi, nslice, self.n_adj_slice, pad=self.slice_padding)
 
                 kdata = self.np_getitem_complex_batch(kspace, adj_sis)
                 self._check_data(kdata, adj_sis, fname)

@@ -67,24 +67,24 @@ class Cmr25Module(MriModule):
                 output, target, batch.datarange
             )
 
-            self.log("train_loss", loss.detach(), prog_bar=True)
+            self.log("train/loss", loss.detach(), prog_bar=True)
 
             total_loss = loss
             if len(ctx_loss_dict:= ctx.get_losses()) > 0:
                 for loss_name, loss_score in ctx_loss_dict.items():
-                    self.log(f"train_{loss_name}", loss_score.detach(), prog_bar=True)
+                    self.log(f"train/{loss_name}", loss_score.detach(), prog_bar=True)
                     total_loss += loss_score
 
             if self.fine_tuning:
                 vgg_loss = self.perceptual_fn(output, target)
                 total_loss += vgg_loss
-                self.log("train_vgg_loss", vgg_loss.detach(), prog_bar=True)
+                self.log("train/vgg_loss", vgg_loss.detach(), prog_bar=True)
 
-            self.log("train_total_loss", total_loss.detach(), prog_bar=True)
+            self.log("train/total_loss", total_loss.detach(), prog_bar=True)
 
             if len(ctx_metric_dict:= ctx.get_metrics()) > 0:
                 for metric_name, metric_score in ctx_metric_dict.items():
-                    self.log(f"train_{metric_name}", metric_score.detach(), prog_bar=True)
+                    self.log(f"train/{metric_name}", metric_score.detach(), prog_bar=True)
 
         return total_loss
 
@@ -109,11 +109,11 @@ class Cmr25Module(MriModule):
 
             if len(ctx_loss_dict:= ctx.get_losses()) > 0:
                 for loss_name, loss_score in ctx_loss_dict.items():
-                    self.log(f"val_{loss_name}", loss_score.detach(), prog_bar=True, sync_dist=True)
+                    self.log(f"val/{loss_name}", loss_score.detach(), prog_bar=True, sync_dist=True, on_epoch=True)
             
             if len(ctx_metric_dict:= ctx.get_metrics()) > 0:
                 for metric_name, metric_score in ctx_metric_dict.items():
-                    self.log(f"val_{metric_name}", metric_score.detach(), prog_bar=True, sync_dist=True)
+                    self.log(f"val/{metric_name}", metric_score.detach(), prog_bar=True, sync_dist=True, on_epoch=True)
 
         return CmrValidationOutputSample(
             img_pred=output,

@@ -37,6 +37,30 @@ class DownBlock(nn.Module):
         return x, enc
 
 
+class ValnillaUpBlock(nn.Module):
+    def __init__(
+            self, in_channels: int, out_channels: int, n_cab: int, kernel_size: int, reduction: int, dropout: float,
+            *,
+            norm: bool = False, bias: bool = True
+        ):
+        super().__init__()
+        self.conv = CABChain(in_channels, n_cab, kernel_size, reduction, dropout, norm = norm, bias = bias)
+        self.up = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias = bias)
+            )
+        self.to_out = CAB(out_channels, kernel_size, reduction, dropout, norm = norm, bias = bias)
+
+    def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        x = self.conv(x)
+        x = self.up(x)
+        x = x + skip
+        x *= 0.5
+        x = self.to_out(x)
+        return x
+                                
+
+
 class UpBlock(nn.Module):
     def __init__(
             self, in_channels: int, out_channels: int, prompt_channels: int, n_cab: int, kernel_size: int, reduction: int, dropout: float, n_history: int = 0,

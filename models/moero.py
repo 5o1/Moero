@@ -181,9 +181,10 @@ class SenseBlock(nn.Module):
         dc_weight = self.dc_weight
         current_img = current_img - (ffx - img_zf) * dc_weight - model_term
 
-        with torch.no_grad():
-            register_extra_metric(self, f"dc_weight_max", dc_weight.detach(), op ="max")
-            register_extra_metric(self, f"dc_weight_min", dc_weight.detach(), op ="min")
+        if self.training:
+            with torch.no_grad():
+                register_extra_metric(self, f"dc_weight_max", dc_weight.detach(), op ="max")
+                register_extra_metric(self, f"dc_weight_min", dc_weight.detach(), op ="min")
 
         return current_img, latent, feat_cached, wordfreq
 

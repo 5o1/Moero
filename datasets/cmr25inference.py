@@ -1,36 +1,16 @@
 import torch
-from typing import Literal
 import h5py
 import numpy as np
 from einops import rearrange
-from os import PathLike
 from data.cmrsample import CmrSample
 
-from . import Cmr25TrainingDataset
+from .cmrdataset import CmrDatasetBase
 
-class Cmr25InferenceDataset(Cmr25TrainingDataset):
-    def __init__(
-        self,
-        path: PathLike | str,
-        transform: torch.nn.Module = None,
-        n_adj_frame: int = 3,
-        n_adj_slice: int = 5,
-        which_adj: Literal["frame", "slice"] = "frame",
-    ):
-        super().__init__(
-            path = path,
-            transform=transform,
-            n_adj_frame=n_adj_frame,
-            n_adj_slice=n_adj_slice,
-            which_adj=which_adj,
-            balance_sampler=None
-        )
-
+class Cmr25InferenceDataset(CmrDatasetBase):
     def __getitem__(self, idx: int):
         fname, seqidx, seqshape = self.raw_samples[idx]
 
         with h5py.File(fname, 'r') as hf:
-            attrs = dict(hf.attrs)
             kus = hf["kus"]
             mask = hf["mask"]
             
@@ -38,8 +18,8 @@ class Cmr25InferenceDataset(Cmr25TrainingDataset):
                 ti, zi = seqidx
                 nframe, nslice = seqshape[0], seqshape[1]
 
-                n_adj_frame = self.n_adj_frame if self.which_adj == "frame" else min(self.n_adj_frame, nframe) - (min(self.n_adj_frame, nframe) % 2 == 0)
-                n_adj_slice = self.n_adj_slice if self.which_adj == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
+                n_adj_frame = self.n_adj_frame if self.adj_dim == "frame" else min(self.n_adj_frame, nframe) - (min(self.n_adj_frame, nframe) % 2 == 0)
+                n_adj_slice = self.n_adj_slice if self.adj_dim == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
 
                 # Make fixed-length adjoint slice or frame indices.
                 adj_tis = self._get_indices(ti, nframe, n_adj_frame, pad="clamp")
@@ -63,8 +43,8 @@ class Cmr25InferenceDataset(Cmr25TrainingDataset):
                 zi = seqidx[0]
                 nslice = seqshape[0]
 
-                n_adj_frame = self.n_adj_frame if self.which_adj == "frame" else 1
-                n_adj_slice = self.n_adj_slice if self.which_adj == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
+                n_adj_frame = self.n_adj_frame if self.adj_dim == "frame" else 1
+                n_adj_slice = self.n_adj_slice if self.adj_dim == "slice" else min(self.n_adj_slice, nslice) - (min(self.n_adj_slice, nslice) % 2 == 0)
 
                 adj_sis = self._get_indices(zi, nslice, self.n_adj_slice, pad="clamp")
 
@@ -96,7 +76,7 @@ class Cmr25InferenceDataset(Cmr25TrainingDataset):
             with torch.no_grad():
                 sample = self.transform(sample)
 
-        if self.which_adj == "frame":  # transpose t s
+        if self.adj_dim == "frame":  # transpose t s
             sample.masked_kspace = rearrange(sample.masked_kspace, "t s c h w -> s t c h w")
             sample.mask = rearrange(sample.mask, "t s c h w -> s t c h w")
 

@@ -13,7 +13,7 @@ from torch.utils.data import Sampler
 import random 
 from torch.utils.data import DistributedSampler
 
-from datasets.cmr25training import Cmr25TrainingDataset
+from datasets.cmrdataset import CmrDatasetBase
 
 class VolumeSampler(Sampler):
     """
@@ -27,7 +27,7 @@ class VolumeSampler(Sampler):
 
     def __init__(
         self,
-        dataset: Cmr25TrainingDataset,
+        dataset: CmrDatasetBase,
         num_replicas: int | None = None,
         rank: int | None = None,
         shuffle: bool = True,
@@ -129,7 +129,7 @@ class VolumeSampler(Sampler):
 
 
 class InferVolumeDistributedSampler(DistributedSampler):
-    def __init__(self, dataset:Cmr25TrainingDataset, num_replicas=None, rank=None, shuffle=False):
+    def __init__(self, dataset:CmrDatasetBase, num_replicas=None, rank=None, shuffle=False):
         if num_replicas is None:
             if not dist.is_initialized():
                 num_replicas = 1

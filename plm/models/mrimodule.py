@@ -25,6 +25,8 @@ from torchmetrics.metric import Metric
 from torch.nn.functional import mse_loss as mse_fn
 from utils.naneu.nn.modules import SSIMLoss
 
+from data.transforms.crop import center_crop_to_smallest
+
 
 class DistributedMetricSum(Metric):
     def __init__(self, dist_sync_on_step=True):
@@ -77,7 +79,7 @@ class MriModule(pl.LightningModule):
         self.fine_tuning = fine_tuning # It is recommend turn off `ckpt_strict` during fine tuning because the module may have unused parameters.
         self.debug = debug
 
-        self.val_logs: list = []
+        self.val_logs = defaultdict(list)
 
         self.num_log_images = num_log_images
         self.val_imagelog_indices = defaultdict(list)
@@ -117,6 +119,9 @@ class MriModule(pl.LightningModule):
             img_zf = outputs.img_zf[0].clone() # 1 h w
             mask = batch.mask[0, batch.mask.size(1) // 2, batch.mask.size(2) // 2, 0:1, ...].clone() # 1 h w
             csm = outputs.csm[0,0:1].clone()
+
+            target, img_pred, img_zf, mask, csm = center_crop_to_smallest(target, img_pred, img_zf, mask, csm)
+
             diffrence = torch.abs(target - img_pred)
 
             img_zf, _ = normalize_minmax(img_zf)
@@ -147,7 +152,7 @@ class MriModule(pl.LightningModule):
             ssim_vals[fname][seq_idx] = 1 - self.ssim_fn(target, img_pred, datarange)
             dataranges[fname] = datarange.clone()
 
-        self.val_logs.append({
+        self.val_logs[dataloader_idx].append({
             "val_loss": outputs.loss.clone(), # issue: https://discuss.pytorch.org/t/pytorch-cannot-allocate-memory/134754/19
             "mse_vals": dict(mse_vals),
             "target_norms": dict(target_norms),
@@ -161,71 +166,72 @@ class MriModule(pl.LightningModule):
                 if param.grad is None:
                     print(name)
 
-    def on_validation_epoch_end(self):        
-        # aggregate losses
-        losses = []
-        mse_vals = defaultdict(dict)
-        target_norms = defaultdict(dict)
-        ssim_vals = defaultdict(dict)
-        datarange = dict()
+    def on_validation_epoch_end(self):
+        for dataloader_idx, val_logs in self.val_logs.items():
+            # aggregate losses
+            losses = []
+            mse_vals = defaultdict(dict)
+            target_norms = defaultdict(dict)
+            ssim_vals = defaultdict(dict)
+            datarange = dict()
 
-        for val_log in self.val_logs:
-            losses.append(val_log["val_loss"].view(-1))
-            for fname in val_log["mse_vals"].keys():
-                mse_vals[fname].update(val_log["mse_vals"][fname])
-            for fname in val_log["target_norms"].keys():
-                target_norms[fname].update(val_log["target_norms"][fname])
-            for fname in val_log["ssim_vals"].keys():
-                ssim_vals[fname].update(val_log["ssim_vals"][fname])
-            for fname in val_log["datarange"]:
-                datarange[fname] = val_log["datarange"][fname]
-        self.val_logs.clear()
+            for val_log in val_logs:
+                losses.append(val_log["val_loss"].view(-1))
+                for fname in val_log["mse_vals"].keys():
+                    mse_vals[fname].update(val_log["mse_vals"][fname])
+                for fname in val_log["target_norms"].keys():
+                    target_norms[fname].update(val_log["target_norms"][fname])
+                for fname in val_log["ssim_vals"].keys():
+                    ssim_vals[fname].update(val_log["ssim_vals"][fname])
+                for fname in val_log["datarange"]:
+                    datarange[fname] = val_log["datarange"][fname]
+            self.val_logs[dataloader_idx].clear()
 
-        # check to make sure we have all files in all metrics
-        assert (
-            mse_vals.keys()
-            == target_norms.keys()
-            == ssim_vals.keys()
-            == datarange.keys()
-        )
-
-        # apply means across image volumes
-        local_volumes = len(mse_vals)
-        metrics = {"nmse": 0, "ssim": 0, "psnr": 0}
-        for fname in mse_vals.keys():
-            mse_val = torch.mean(
-                torch.cat([v.view(-1) for _, v in mse_vals[fname].items()])
+            # check to make sure we have all files in all metrics
+            assert (
+                mse_vals.keys()
+                == target_norms.keys()
+                == ssim_vals.keys()
+                == datarange.keys()
             )
-            target_norm = torch.mean(
-                torch.cat([v.view(-1) for _, v in target_norms[fname].items()])
-            )
-            metrics["nmse"] = metrics["nmse"] + mse_val / target_norm
-            metrics["psnr"] = (
-                metrics["psnr"]
-                + 20
-                * torch.log10(
-                    torch.as_tensor(
-                        datarange[fname], dtype=mse_val.dtype, device=mse_val.device
-                    )
+
+            # apply means across image volumes
+            local_volumes = len(mse_vals)
+            metrics = {"nmse": 0, "ssim": 0, "psnr": 0}
+            for fname in mse_vals.keys():
+                mse_val = torch.mean(
+                    torch.cat([v.view(-1) for _, v in mse_vals[fname].items()])
                 )
-                - 10 * torch.log10(mse_val)
-            )
-            metrics["ssim"] = metrics["ssim"] + torch.mean(
-                torch.cat([v.view(-1) for _, v in ssim_vals[fname].items()])
-            )
+                target_norm = torch.mean(
+                    torch.cat([v.view(-1) for _, v in target_norms[fname].items()])
+                )
+                metrics["nmse"] = metrics["nmse"] + mse_val / target_norm
+                metrics["psnr"] = (
+                    metrics["psnr"]
+                    + 20
+                    * torch.log10(
+                        torch.as_tensor(
+                            datarange[fname], dtype=mse_val.dtype, device=mse_val.device
+                        )
+                    )
+                    - 10 * torch.log10(mse_val)
+                )
+                metrics["ssim"] = metrics["ssim"] + torch.mean(
+                    torch.cat([v.view(-1) for _, v in ssim_vals[fname].items()])
+                )
 
-        # reduce across ddp via sum
-        metrics["nmse"] = self.NMSE(metrics["nmse"])
-        metrics["ssim"] = self.SSIM(metrics["ssim"])
-        metrics["psnr"] = self.PSNR(metrics["psnr"])
-        tot_examples = self.TotExamples(torch.as_tensor(local_volumes))
-        val_loss = self.ValLoss(torch.cat(losses).sum() if len(losses) > 0 else torch.tensor(0.0))
-        tot_slice_examples = self.TotSliceExamples(torch.as_tensor(len(losses), dtype=torch.float))
+            # reduce across ddp via sum
+            metrics["nmse"] = self.NMSE(metrics["nmse"])
+            metrics["ssim"] = self.SSIM(metrics["ssim"])
+            metrics["psnr"] = self.PSNR(metrics["psnr"])
+            tot_examples = self.TotExamples(torch.as_tensor(local_volumes))
+            val_loss = self.ValLoss(torch.cat(losses).sum() if len(losses) > 0 else torch.tensor(0.0))
+            tot_slice_examples = self.TotSliceExamples(torch.as_tensor(len(losses), dtype=torch.float))
 
-        # log metrics
-        self.log(f"validation_loss", val_loss / tot_slice_examples, prog_bar=True, sync_dist=True)
-        for metric, value in metrics.items():
-            self.log(f"val_metrics/{metric}", value / tot_examples, sync_dist=True)
+            # log metrics
+            self.log(f"val{dataloader_idx}/loss", val_loss / tot_slice_examples, prog_bar=True, sync_dist=True)
+            for metric, value in metrics.items():
+                self.log(f"val{dataloader_idx}/{metric}", value / tot_examples, prog_bar=True, sync_dist=True)
 
 
     def setup(self, stage=None):

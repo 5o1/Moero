@@ -26,8 +26,6 @@ This project uses these Naneu tools:
 
 ## Installation
 
-Dependencies: Python 3.10, torch 12.6
+Testing environment: Python 3.10, torch 2.7.1
 
-The repository includes a `requirements.txt` for reference.
-
-In our tests, it doesn’t work to set up the environment as-is. You may need to install the dependencies step by step in order (e.g., Python -> PyTorch -> …).
+Installing the environment directly from `requirements.txt` may not work. Instead, install the dependencies step by step: Python -> PyTorch -> `requirements.txt`.

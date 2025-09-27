@@ -1,9 +1,9 @@
 import pytorch_lightning as pl
-from utils.naneu.common import importlib
 from os import PathLike
 from typing import List, Literal
 from utils.naneu.common.importlib import LazyModule
 from datasets import VolumeSampler
+from dataclasses import dataclass
 import torch
 
 def worker_init_fn(worker_id: int):
@@ -21,44 +21,53 @@ def worker_init_fn(worker_id: int):
     torch.cuda.manual_seed(seed)
     torch.random.manual_seed(seed)
 
+@dataclass
+class DatasetConfig:
+    path: PathLike | str
+    dataset_class: str
+    dataset_init_args: dict
+
 class CmrDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        train_path: PathLike | str,
-        val_paths: List[PathLike | str],
-        dataset_class: str,
-        dataset_init_args: dict,
+        train_config: DatasetConfig,
+        val_configs: List[DatasetConfig],
         batch_size: int = 1,
         num_workers: int = 1,
     ):
         super().__init__()
-        self.dataset_class = importlib.LazyModule(dataset_class)
-        self.dataset_init_args = dataset_init_args
-        self.train_path = train_path
-        self.val_paths = val_paths
+        self.train_config = train_config
+        self.val_configs = val_configs
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-    def _create_data_loader(
-        self,
-        path: PathLike | str,
-        dataset_class,
-        dataset_init_args: dict,
-        task: Literal["train", "val"] = "train",
-    ) -> torch.utils.data.DataLoader:
-        dataset_init_args = dataset_init_args.copy()
+        # Dataset placeholders
+        self.trainset: torch.utils.data.Dataset = None
+        self.valsets: List[torch.utils.data.Dataset] = None
+    
+    def setup(self, stage: str):
+        self.trainset = self._create_dataset(self.train_config)
+        self.valsets = [self._create_dataset(config) for config in self.val_configs]
+
+    def _create_dataset(self, config: DatasetConfig):
+        path = config.path
+        dataset_class = config.dataset_class
+        dataset_init_args = config.dataset_init_args.copy()
         for key, value in dataset_init_args.items():
             if isinstance(value, dict) and 'class_path' in value:
                 dataset_init_args[key] = LazyModule(value['class_path'])(**value.get('init_args', {}))
 
-        if ("train" not in task) and ("balance_sampler" in dataset_init_args):
-            dataset_init_args["balance_sampler"] = None
-
-        dataset = dataset_class(
+        dataset = LazyModule(dataset_class)(
             path=path,
             **dataset_init_args,
         )
+        return dataset
 
+    def _create_dataloader(
+        self,
+        dataset: torch.utils.data.Dataset,
+        task: Literal["train", "val"] = "train",
+    ) -> torch.utils.data.DataLoader:
         # Setting the distributed sampler if available
         sampler = None
         if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -92,46 +101,37 @@ class CmrDataModule(pl.LightningDataModule):
         self.logger = logger
 
     def train_dataloader(self):
-        return self._create_data_loader(self.train_path, self.dataset_class, self.dataset_init_args, task="train")
+        return self._create_dataloader(self.trainset, task = "train")
     
     def val_dataloader(self):
-        return [self._create_data_loader(path, self.dataset_class, self.dataset_init_args, task = "val") for path in self.val_paths]
+        return [self._create_dataloader(dataset, task = "val") for dataset in self.valsets]
     
 
-class CmrInferenceDataModule(pl.LightningDataModule):
+class CmrInferenceDataModule(CmrDataModule):
     def __init__(
         self,
-        src_path: PathLike | str,
-        dataset_class: str,
-        dataset_init_args: dict,
+        config: DatasetConfig,
         batch_size: int = 1,
         num_workers: int = 1,
     ):
         super().__init__()
-        self.dataset_class = importlib.LazyModule(dataset_class)
-        self.dataset_init_args = dataset_init_args
-        self.src_path = src_path
+        self.config = config
         self.batch_size = batch_size
         self.num_workers = num_workers
 
+        # Dataset placeholders
+        self.dataset: torch.utils.data.Dataset = None
+
+    def setup(self, stage: str):
+        self.dataset = self._create_dataset(self.config)
+
     def _create_data_loader(
         self,
-        src_path: PathLike | str,
-        dataset_class,
-        dataset_init_args: dict,
+        dataset: torch.utils.data.Dataset,
     ) -> torch.utils.data.DataLoader:
-        dataset_init_args = dataset_init_args.copy()
-        for key, value in dataset_init_args.items():
-            if isinstance(value, dict) and 'class_path' in value:
-                dataset_init_args[key] = LazyModule(value['class_path'])(**value.get('init_args', {}))
-
-        dataset = dataset_class(
-            path=src_path,
-            **dataset_init_args,
-        )
-
         # Setting the distributed sampler if available
         sampler = None
+
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             sampler = VolumeSampler(
                 dataset,
@@ -154,6 +154,6 @@ class CmrInferenceDataModule(pl.LightningDataModule):
         self.logger = logger
 
     def predict_dataloader(self):
-        return self._create_data_loader(self.src_path, self.dataset_class, self.dataset_init_args)
+        return self._create_data_loader(self.dataset)
     
    
