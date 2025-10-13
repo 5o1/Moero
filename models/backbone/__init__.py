@@ -2,8 +2,8 @@ from .promptunet import (
     PromptUnet
 )
 
-from .promptvqunet import (
-    PromptVQUnet
+from .embedoutunet import (
+    EmbedOutUnet
 )
 
 from .unet import (

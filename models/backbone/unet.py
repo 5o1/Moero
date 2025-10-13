@@ -1,7 +1,7 @@
 from typing import List
 import torch
 from torch import nn
-from ..modules.conv import DownBlock, CABChain, ValnillaUpBlock
+from ..modules.conv import DownBlock, CABChain, UpBlock
 from utils.naneu.helpers.context import register_extra_output
 from utils.naneu.helpers.rearrange import TorchModuleForwardHook # Don't touch this import
 
@@ -64,7 +64,6 @@ class Unet(nn.Module):
             )
 
         super().__init__()
-        self.pyramid_channels = pyramid_channels
         self.idx_cascade = idx_cascade
 
         # Feature extraction
@@ -87,7 +86,7 @@ class Unet(nn.Module):
 
         # Decoder - 3 UpBlocks
         self.dec = torch.nn.ModuleList([
-            ValnillaUpBlock(pyramid_channels[i + 1], pyramid_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
+            UpBlock(pyramid_channels[i + 1], pyramid_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
             for i in range(self.depth)
         ])
 
@@ -99,7 +98,7 @@ class Unet(nn.Module):
         Real. Complex dimension have bound to channel dimension.
         x : b ref c h w
         """
-        residual = [None for _ in range(len(self.pyramid_channels)-1)]
+        residual = [None for _ in range(self.depth)]
 
         # 0. featue extraction
         x = self.to_input(x)

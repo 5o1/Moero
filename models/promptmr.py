@@ -159,7 +159,7 @@ class SenseBlock(nn.Module):
         # Normalize
         current_img_with_buffer = self.norm(current_img_with_buffer)
         if self.use_noise:
-            noise = self.norm(noise, is_fit = False)
+            noise = self.norm(noise, is_fit = False) # Because the data range of noise term differs greatly from that of other terms, the statistics of other terms are used to normalize the noise term.
             raw_nchannels = raw_nchannels + [noise.size(-3)]
             current_img_with_buffer = torch.cat([current_img_with_buffer, noise], dim=-3)
 

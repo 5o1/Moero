@@ -2,7 +2,7 @@ seed_everything: 42
 trainer:
   accelerator: gpu
   precision: 32
-  devices: [1, 2, 6, 7]
+  devices: [4]
   num_nodes: 1
   max_epochs: 8
   log_every_n_steps: 50 # log every n steps during training
@@ -14,7 +14,7 @@ trainer:
       project: moero
       mode: online
       save_dir: /home/lyy/exp
-      tags: [cmr25lab, promptmr, c6, fastmri]
+      tags: [cmr25lab, promptmr, c6, fastmri-mini, singlegpu]
       name: promptmr
   callbacks:
     - class_path: pytorch_lightning.callbacks.ModelCheckpoint

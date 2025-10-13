@@ -163,7 +163,7 @@ class SenseBlock(nn.Module):
         # Normalize
         current_img_with_buffer = self.norm(current_img_with_buffer)
         if self.use_noise:
-            noise = self.norm(noise, is_fit = False)
+            noise = self.norm(noise, is_fit = False) # Because the data range of noise term differs greatly from that of other terms, the statistics of other terms are used to normalize the noise term.
             raw_nchannels = raw_nchannels + [noise.size(-3)]
             current_img_with_buffer = torch.cat([current_img_with_buffer, noise], dim=-3)
 
@@ -293,13 +293,12 @@ class Moero(nn.Module):
             raise ValueError(f"Unexpected dtype for mask: {mask.dtype}. Expected a floating-point dtype.")
         if masked_kspace.size(1) % 2 != 1 or masked_kspace.size(2) % 2 != 1:
             raise ValueError(f"Input masked_kspace must have odd number of frames and slices. But got {masked_kspace.size(1)} frames and {masked_kspace.size(2)} slices.")
+        B, R, A, C, H, W = masked_kspace.shape
 
         # TODO: Because most of the data is dirty and noisy, a phase unwrapping module is needed.
 
-        # register_extra_output(self, "masked_kspace", masked_kspace) # Debug print
-
-        csm, wordfreq = self.csm_model(masked_kspace, mask)
-
+        # Generate coil sensitivity maps
+        csm, embedding = self.csm_model(masked_kspace, mask)
         if csm.isnan().any():
             if self.training:
                 raise ValueError("Coil sensitivity maps contains NaN values.")
@@ -307,62 +306,72 @@ class Moero(nn.Module):
                 warn(f"Coil sensitivity maps contains NaN values. This may cause issues in inference. Consider checking the input data or the model parameters.")
                 csm = torch.nan_to_num(csm, nan=0.0, posinf=0, neginf=0)
 
+        # Initial reconstruction
         img_zf = self.sens_reduce(masked_kspace, csm)
         img_pred = img_zf.clone()
         latent = img_zf.clone()
         feat_history = [[] for _ in range(3)]
 
+        # Cascade through each branch group
         for cascade_idx, cascade_group in enumerate(self.branchgrids):
             try:
-                # Branch Model Learning
-                with torch.no_grad():
-                    route: torch.Tensor = self.branchnavs[cascade_idx](wordfreq)
-                    if len(route) != len(cascade_group):
-                        raise ValueError(f"Route length {len(route)} does not match the number of cascades branchs {len(cascade_group)}.")
-                    
-                    indices_available: List[int] = route.nonzero().flatten().tolist()
-                    indices_not_available: List[int] = [i for i in range(len(route)) if i not in indices_available]
+                # MoE routing
+                route_weights, route_mask, route_idx = self.branchnavs[cascade_idx](embedding) # [b, n_experts], weights for each expert
+                experts_indices = route_mask.sum(dim=0).nonzero(as_tuple=True)[0]  # Indices of experts that are selected by at least one sample
 
                 # Sense forward
-                img_pred_branches: List[torch.Tensor] = []
-                latent_branches: List[torch.Tensor] = []
-                feat_cached_branches: List[List[torch.Tensor]] = []
-                wordfreq_branches: List[torch.Tensor] = []
+                img_pred_dense = None
+                latent_dense = None
+                feat_cached_dense = None
+                embedding_dense = None
 
-                for unit in [cascade_group[i] for i in indices_available]:
-                    img_pred_unit, latent_unit, feat_cached_unit, word_freq_unit = unit(img_pred, img_zf, latent, mask, csm, feat_history)
+                for expert_idx in experts_indices:
+                    expert = cascade_group[expert_idx]
 
-                    for l, v in zip([img_pred_branches, latent_branches, feat_cached_branches, wordfreq_branches], [img_pred_unit, latent_unit, feat_cached_unit, word_freq_unit]):
-                        l.append(v)
+                    # To sparse the batch
+                    batch_indices = route_mask[:, expert_idx].nonzero(as_tuple=True)[0] # Indices of samples that select this expert
+                    
+                    img_pred_expert, latent_expert, feat_cached_expert, embedding_expert = expert(
+                        img_pred[batch_indices],
+                        img_zf[batch_indices],
+                        latent[batch_indices],
+                        mask[batch_indices],
+                        csm[batch_indices],
+                        [[feat_history[ilevel][ihistory][batch_indices] for ihistory in range(len(feat_history[ilevel]))] for ilevel in range(len(feat_history))]
+                    )
+                    # Initialize the dense lists 
+                    if img_pred_dense is None:
+                        img_pred_dense = torch.zeros(B, *img_pred_expert.shape[1:], device=img_pred_expert.device, dtype=img_pred_expert.dtype)
+                        latent_dense = torch.zeros(B, *latent_expert.shape[1:], device=latent_expert.device, dtype=latent_expert.dtype)
+                        feat_cached_dense = [torch.zeros(B, *x.shape[1:], device=x.device, dtype=x.dtype) for x in feat_cached_expert]
+                        embedding_dense = torch.zeros(B, *embedding_expert.shape[1:], device=embedding_expert.device, dtype=embedding_expert.dtype)
 
-                if len(img_pred_branches) == 0:
-                    raise ValueError(f"All cascades in cascade group {cascade_idx} are not available. Please check the route {route}.")
+                    # Aggregate results to dense lists
+                    img_pred_dense, latent_dense, embedding_dense = map(
+                        lambda dense, sparse: dense.index_add_(0, batch_indices, sparse * route_weights[batch_indices, expert_idx].view(-1, *([1]* (sparse.ndim - 1)))),
+                        [img_pred_dense, latent_dense, embedding_dense],
+                        [img_pred_expert, latent_expert, embedding_expert]  
+                    )
+                    for i in range(len(feat_cached_expert)):
+                        feat_cached_dense[i] = feat_cached_dense[i].index_add_(0, batch_indices, feat_cached_expert[i] * route_weights[batch_indices, expert_idx].view(-1, *([1]* (feat_cached_expert[i].ndim - 1))))
                 
-                # Merge Branch Results
-                img_pred: torch.Tensor = torch.stack(img_pred_branches, dim=0).mean(0)
-                latent: torch.Tensor = torch.stack(latent_branches, dim=0).mean(0)
-                feat_cached: List[torch.Tensor] = [
-                    torch.stack([
-                        feat_cached_branches[branch_idx][feat_idx]
-                        for branch_idx in range(len(feat_cached_branches))
-                        ], dim=0).mean(0)
-                        for feat_idx in range(len(feat_cached_branches[0]))
-                        ]
-                wordfreq: torch.Tensor = torch.stack(wordfreq_branches, dim=0).mean(0)
+                # Update iterative variables
+                img_pred = img_pred_dense
+                latent = latent_dense
+                embedding = embedding_dense
+                for i in range(len(feat_history)):
+                    feat_history[i].append(feat_cached_dense[i])
 
                 # Clean cache
-                img_pred_branches = None
-                latent_branches = None
-                feat_cached_branches = None
-                wordfreq_branches = None
+                img_pred_dense = None
+                latent_dense = None
+                feat_cached_dense = None
+                embedding_dense = None
 
             except torch.cuda.OutOfMemoryError as e:
                 raise torch.cuda.OutOfMemoryError(
                     f"Out of memory in cascade {cascade_idx}. Input shape = {masked_kspace.shape}. Consider reducing cascades or datasize."
                 ) from e
-            
-            for ilevel, level_history in enumerate(feat_history):
-                level_history.append(feat_cached[ilevel])
 
         # Get reduced central slice as final output
         img_pred = img_pred[:, img_pred.size(1) // 2, img_pred.size(2) // 2, ...]

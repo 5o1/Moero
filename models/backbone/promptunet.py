@@ -1,7 +1,7 @@
 from typing import List, Optional
 import torch
 from torch import nn
-from ..modules.conv import DownBlock, CABChain, UpBlock
+from ..modules.conv import DownBlock, CABChain, PromptUpBlock
 from ..modules.prompt import PromptBlock
 from utils.naneu.helpers.context import register_extra_output
 from utils.naneu.helpers.rearrange import TorchModuleForwardHook # Don't touch this import
@@ -54,6 +54,7 @@ class PromptUnet(nn.Module):
             dropout: float = 0.0,
             idx_cascade: int = None,
             n_history: int = 0,
+            *,
             bias: bool = True,
             norm: bool = False,
             history_norm: bool = False,
@@ -74,7 +75,6 @@ class PromptUnet(nn.Module):
             )
 
         super().__init__()
-        self.pyramid_channels = pyramid_channels
         self.idx_cascade = idx_cascade
         self.n_history = n_history
 
@@ -103,7 +103,7 @@ class PromptUnet(nn.Module):
         ])
 
         self.dec = torch.nn.ModuleList([
-            UpBlock(pyramid_channels[i + 1], pyramid_channels[i], prompt_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias, history_norm=history_norm).rearrange("b ref c h w -> (b ref) c h w")
+            PromptUpBlock(pyramid_channels[i + 1], pyramid_channels[i], prompt_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias, history_norm=history_norm).rearrange("b ref c h w -> (b ref) c h w")
             for i in range(self.depth)
         ])
 
@@ -116,22 +116,20 @@ class PromptUnet(nn.Module):
         x : b ref c h w
         """
         if history is None:
-            history = [None for _ in range(len(self.pyramid_channels) - 1)]
+            history = [None for _ in range(self.depth)]
         else:
             n_cached = len(history[0])
             if not all(n_cached == len(history[d]) for d in range(1, len(history), 1)):
                 raise ValueError(f"History must be a list of lists with the same length. Got {[len(h) for h in history]}.")
             if n_cached == 0: # Initialization
-                history = [None for _ in range(len(self.pyramid_channels) - 1)]
+                history = [None for _ in range(self.depth)]
             elif n_cached < self.n_history: # Padding by first history
                 history = [torch.cat(h[:1] * (self.n_history - n_cached) + h, dim=-3)  for h in history]
             else: # Use last self.n_history history
                 history = [torch.cat(h[-self.n_history:], dim=-3) for h in history]
 
-        cache = [None for _ in range(len(self.pyramid_channels)-1)]
-        residual = [None for _ in range(len(self.pyramid_channels)-1)]
-
-        # register_extra_output(self, f"to_input.{str(self.idx_cascade)}", x.detach().clone())
+        cache = [None for _ in range(self.depth)]
+        residual = [None for _ in range(self.depth)]
 
         # 0. featue extraction
         x = self.to_input(x)
