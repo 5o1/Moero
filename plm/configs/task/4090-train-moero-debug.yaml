@@ -1,27 +1,25 @@
-seed_everything: 5
+seed_everything: 42
 trainer:
   accelerator: gpu
   precision: 32
-  strategy: ddp_find_unused_parameters_true
-  devices: [0, 3, 4, 5, 6, 7]
-  # accumulate_grad_batches: 2 #
+  devices: [1]
   num_nodes: 1
-  max_epochs: 24
+  max_epochs: 8
   log_every_n_steps: 50 # log every n steps during training
   deterministic: false
   use_distributed_sampler: false # Use false because custom VolumeSamplers have been used
   logger: 
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      project: cmr25
+      project: moero
       mode: online
-      save_dir: /home/hulabdl/exp
-      tags: [cmr25lab, moero9]
-      name: moero9
+      save_dir: /home/lyy/exp
+      tags: [cmr25lab, moero, c6, fastmri-mini, singlegpu, reduction2]
+      name: moero-6
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
-        monitor: validation_loss
+        monitor: val0/loss
         mode: min 
         save_top_k: 1 # -1 to save all checkpoints, 5 to save the top 5 checkpoints
         save_last: True # always save the last checkpoint
@@ -30,9 +28,11 @@ trainer:
       init_args:
         precision: "high"  # Set to "high" for high precision matmul operations
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
-    - class_path: plm.callbacks.TrainingCheckpoint
+    - class_path: plm.callbacks.FlopsProfiler
       init_args:
-        every_n_minites: 10
+        inputs_mapper:
+          class_path: plm.callbacks.flops.CmrInputsMapper
+          init_args:
+            keys: ["masked_kspace", "mask"]
 
-# ckpt_path: 
-
+ckpt_path: null

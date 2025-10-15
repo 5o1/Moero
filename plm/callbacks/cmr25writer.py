@@ -1,4 +1,4 @@
-from pytorch_lightning.callbacks import BasePredictionWriter    
+from lightning.pytorch.callbacks import BasePredictionWriter    
 from collections import defaultdict
 from typing import Dict, Any, Literal, Optional, Sequence
 import os
@@ -8,7 +8,7 @@ from queue import Queue, Full
 from concurrent.futures import ThreadPoolExecutor
 import atexit
 from data.constructor import GridConstructor
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 # from data.cmrsample import CmrSliceSample, CmrVolumeSample
 
 class AsyncTensorWriterPool:

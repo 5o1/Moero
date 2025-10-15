@@ -1,4 +1,4 @@
-from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBar, RichProgressBarTheme, MetricsTextColumn, reconfigure, get_console, CustomProgress, pl
+from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBar, RichProgressBarTheme, MetricsTextColumn, reconfigure, get_console, CustomProgress, pl
 from typing import Optional, Any, Iterable, Tuple, List, Dict
 from typing_extensions import override
 from collections.abc import Generator

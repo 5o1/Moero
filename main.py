@@ -10,9 +10,9 @@ from argparse import ArgumentParser
 import yaml
 import torch
 import importlib
-from pytorch_lightning.cli import LightningCLI, SaveConfigCallback
+from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from typing import Type, List
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 
 
 def preprocess_save_dir():

@@ -19,7 +19,7 @@ Change logs:
 from collections import defaultdict
 from data.cmrsample import CmrValidationOutputSample, CmrSample
 
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
 from torchmetrics.metric import Metric
 from torch.nn.functional import mse_loss as mse_fn
@@ -52,7 +52,7 @@ class MriModule(pl.LightningModule):
     """
     Abstract super class for deep learning reconstruction models.
 
-    This is a subclass of the LightningModule class from pytorch_lightning,
+    This is a subclass of the LightningModule class from lightning.pytorch,
     with some additional functionality specific to fastMRI:
         - Evaluating reconstructions
         - Visualization

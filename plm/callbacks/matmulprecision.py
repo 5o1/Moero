@@ -1,5 +1,5 @@
 import torch
-from pytorch_lightning.callbacks import Callback
+from lightning.pytorch.callbacks import Callback
 
 class MatmulPrecisionCallback(Callback):
     def __init__(self, precision: str = "high"):

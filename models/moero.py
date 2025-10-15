@@ -4,6 +4,7 @@ from typing import List, Tuple
 from utils.naneu import fft
 from utils.naneu.helpers.rearrange import TorchModuleForwardHook # Don't touch this import
 from utils.naneu.helpers.context import register_extra_output, register_extra_metric
+from utils.naneu.common.importlib import LazyModule
 from utils.algos.acs import find_max_square
 from utils.complex import interpolate
 from .modules.format import Format4Unet2d
@@ -12,7 +13,6 @@ from data.transforms.crop import center_crop, make_center_mask
 from einops import rearrange
 from copy import deepcopy
 from warnings import warn
-
 
 class CsmBlock(nn.Module):
     """
@@ -206,42 +206,60 @@ class Moero(nn.Module):
     """
     def __init__(
             self,
-            csm_model: nn.Module,
-            cascades: List[nn.Module],
-            branchnav: nn.Module,
-            nbranch: int = 2,
+            csm_model: nn.Module, # id 0
+            cascades: List[nn.Module], # id 1 to n_cascades
+            branchnav_class_path: str,
+            moe_poolsize: List[int], # number of experts in each cascade
+            moe_n_activated: List[int], # number of activated experts for each cascade
+            moe_n_recurrent: List[int], # number of recurrent times for each cascade
+            moe_embed_channels: int = 1024, # dimension of the embedding vector
             csmblock_kwargs: dict = {},
             senseblock_kwargs: dict = {}
     ):
         super().__init__()
+        if len(cascades) != len(moe_poolsize) or len(cascades) != len(moe_n_activated) or len(cascades) != len(moe_n_recurrent):
+            raise ValueError("Length of cascades, moe_poolsize, moe_n_activated, moe_n_recurrent, and branchnav must be the same.")
+        
+        self.moe_poolsize = moe_poolsize
+        self.moe_n_activated = moe_n_activated
+        self.moe_n_recurrent = moe_n_recurrent
+        self.moe_embed_channels = moe_embed_channels
+
+        # Sensitivity map estimation module
         self.csm_model = CsmBlock(csm_model, **csmblock_kwargs)
 
+        # Reconstruction module with MoE architecture
         self.branchgrids = nn.ModuleList([
-            nn.ModuleList([
-                SenseBlock(deepcopy(cascade), **senseblock_kwargs) for _ in range(nbranch)
+            nn.ModuleList([ # experts pool in each cascade
+                SenseBlock(deepcopy(cascade), **senseblock_kwargs) for _ in range(moe_poolsize[icascade])
             ])
-            for cascade in cascades
+            for icascade, cascade in enumerate(cascades)
         ]) # (n_cascades, n_branch, SenseBlock)
 
-        self.sync_vq_module_share_state()
+        self.sync_embed_module_share_state()
 
+        branchnav_class = LazyModule(branchnav_class_path)
         self.branchnavs = nn.ModuleList([
-            deepcopy(branchnav) for _ in range(len(cascades))
-        ]) # (n_cascades, BranchNav)
+            branchnav_class(
+                in_channels = moe_embed_channels,
+                poolsize = moe_poolsize[icascade],
+                top_k = moe_n_activated[icascade]
+            ) for icascade in range(len(cascades))
+        ]) # (n_cascades, Branchnav)
 
         for i in range(len(self.branchnavs)):
             self.branchnavs[i].idx=i
     
-    def sync_vq_module_share_state(self):
+    def sync_embed_module_share_state(self):
         """
-        Share the VQ module across all cascades.
+        Share the Embed module across all cascades.
         """
         results = []
         for i, cascade_group in enumerate(self.branchgrids):
-            vq_module = cascade_group[0].get_model().get_vq_module()
+            embed_module = cascade_group[0].get_model().embed_module
             for j, unit in enumerate(cascade_group[1:]):
-                if unit.get_model().get_vq_module() is not vq_module:
-                    unit.get_model().set_vq_module(vq_module)
+                if unit.get_model().embed_module is not embed_module:
+                    unit.get_model().embed_module = embed_module
                     results.append((i, j+1))
         if results:
             print(f"Perform object sharing in BranchGrids: {results}")
@@ -249,7 +267,7 @@ class Moero(nn.Module):
 
     def load_state_dict(self, state_dict, strict = True, assign = False):
         result = super().load_state_dict(state_dict, strict, assign)
-        self.sync_vq_module_share_state()  # Ensure VQ module is shared after loading state dict
+        self.sync_embed_module_share_state()  # Ensure Embed module is shared after loading state dict
         return result
 
     def sens_reduce(self, kspace: torch.Tensor, csm: torch.Tensor) -> torch.Tensor:
@@ -314,64 +332,65 @@ class Moero(nn.Module):
 
         # Cascade through each branch group
         for cascade_idx, cascade_group in enumerate(self.branchgrids):
-            try:
-                # MoE routing
-                route_weights, route_mask, route_idx = self.branchnavs[cascade_idx](embedding) # [b, n_experts], weights for each expert
-                experts_indices = route_mask.sum(dim=0).nonzero(as_tuple=True)[0]  # Indices of experts that are selected by at least one sample
+            for _ in range(self.moe_n_recurrent[cascade_idx]): # Recurrent times
+                try:
+                    # MoE routing
+                    route_weights, route_mask, route_idx = self.branchnavs[cascade_idx](embedding) # [b, n_experts], weights for each expert
+                    experts_indices = route_mask.sum(dim=0).nonzero(as_tuple=True)[0]  # Indices of experts that are selected by at least one sample
 
-                # Sense forward
-                img_pred_dense = None
-                latent_dense = None
-                feat_cached_dense = None
-                embedding_dense = None
+                    # Sense forward
+                    img_pred_dense = None
+                    latent_dense = None
+                    feat_cached_dense = None
+                    embedding_dense = None
 
-                for expert_idx in experts_indices:
-                    expert = cascade_group[expert_idx]
+                    for expert_idx in experts_indices:
+                        expert = cascade_group[expert_idx]
 
-                    # To sparse the batch
-                    batch_indices = route_mask[:, expert_idx].nonzero(as_tuple=True)[0] # Indices of samples that select this expert
+                        # To sparse the batch
+                        batch_indices = route_mask[:, expert_idx].nonzero(as_tuple=True)[0] # Indices of samples that select this expert
+                        
+                        img_pred_expert, latent_expert, feat_cached_expert, embedding_expert = expert(
+                            img_pred[batch_indices],
+                            img_zf[batch_indices],
+                            latent[batch_indices],
+                            mask[batch_indices],
+                            csm[batch_indices],
+                            [[feat_history[ilevel][ihistory][batch_indices] for ihistory in range(len(feat_history[ilevel]))] for ilevel in range(len(feat_history))]
+                        )
+                        # Initialize the dense lists 
+                        if img_pred_dense is None:
+                            img_pred_dense = torch.zeros(B, *img_pred_expert.shape[1:], device=img_pred_expert.device, dtype=img_pred_expert.dtype)
+                            latent_dense = torch.zeros(B, *latent_expert.shape[1:], device=latent_expert.device, dtype=latent_expert.dtype)
+                            feat_cached_dense = [torch.zeros(B, *x.shape[1:], device=x.device, dtype=x.dtype) for x in feat_cached_expert]
+                            embedding_dense = torch.zeros(B, *embedding_expert.shape[1:], device=embedding_expert.device, dtype=embedding_expert.dtype)
+
+                        # Aggregate results to dense lists
+                        img_pred_dense, latent_dense, embedding_dense = map(
+                            lambda dense, sparse: dense.index_add_(0, batch_indices, sparse * route_weights[batch_indices, expert_idx].view(-1, *([1]* (sparse.ndim - 1)))),
+                            [img_pred_dense, latent_dense, embedding_dense],
+                            [img_pred_expert, latent_expert, embedding_expert]  
+                        )
+                        for i in range(len(feat_cached_expert)):
+                            feat_cached_dense[i] = feat_cached_dense[i].index_add_(0, batch_indices, feat_cached_expert[i] * route_weights[batch_indices, expert_idx].view(-1, *([1]* (feat_cached_expert[i].ndim - 1))))
                     
-                    img_pred_expert, latent_expert, feat_cached_expert, embedding_expert = expert(
-                        img_pred[batch_indices],
-                        img_zf[batch_indices],
-                        latent[batch_indices],
-                        mask[batch_indices],
-                        csm[batch_indices],
-                        [[feat_history[ilevel][ihistory][batch_indices] for ihistory in range(len(feat_history[ilevel]))] for ilevel in range(len(feat_history))]
-                    )
-                    # Initialize the dense lists 
-                    if img_pred_dense is None:
-                        img_pred_dense = torch.zeros(B, *img_pred_expert.shape[1:], device=img_pred_expert.device, dtype=img_pred_expert.dtype)
-                        latent_dense = torch.zeros(B, *latent_expert.shape[1:], device=latent_expert.device, dtype=latent_expert.dtype)
-                        feat_cached_dense = [torch.zeros(B, *x.shape[1:], device=x.device, dtype=x.dtype) for x in feat_cached_expert]
-                        embedding_dense = torch.zeros(B, *embedding_expert.shape[1:], device=embedding_expert.device, dtype=embedding_expert.dtype)
+                    # Update iterative variables
+                    img_pred = img_pred_dense
+                    latent = latent_dense
+                    embedding = embedding_dense
+                    for i in range(len(feat_history)):
+                        feat_history[i].append(feat_cached_dense[i])
 
-                    # Aggregate results to dense lists
-                    img_pred_dense, latent_dense, embedding_dense = map(
-                        lambda dense, sparse: dense.index_add_(0, batch_indices, sparse * route_weights[batch_indices, expert_idx].view(-1, *([1]* (sparse.ndim - 1)))),
-                        [img_pred_dense, latent_dense, embedding_dense],
-                        [img_pred_expert, latent_expert, embedding_expert]  
-                    )
-                    for i in range(len(feat_cached_expert)):
-                        feat_cached_dense[i] = feat_cached_dense[i].index_add_(0, batch_indices, feat_cached_expert[i] * route_weights[batch_indices, expert_idx].view(-1, *([1]* (feat_cached_expert[i].ndim - 1))))
-                
-                # Update iterative variables
-                img_pred = img_pred_dense
-                latent = latent_dense
-                embedding = embedding_dense
-                for i in range(len(feat_history)):
-                    feat_history[i].append(feat_cached_dense[i])
+                    # Clean cache
+                    img_pred_dense = None
+                    latent_dense = None
+                    feat_cached_dense = None
+                    embedding_dense = None
 
-                # Clean cache
-                img_pred_dense = None
-                latent_dense = None
-                feat_cached_dense = None
-                embedding_dense = None
-
-            except torch.cuda.OutOfMemoryError as e:
-                raise torch.cuda.OutOfMemoryError(
-                    f"Out of memory in cascade {cascade_idx}. Input shape = {masked_kspace.shape}. Consider reducing cascades or datasize."
-                ) from e
+                except torch.cuda.OutOfMemoryError as e:
+                    raise torch.cuda.OutOfMemoryError(
+                        f"Out of memory in cascade {cascade_idx}. Input shape = {masked_kspace.shape}. Consider reducing cascades or datasize."
+                    ) from e
 
         # Get reduced central slice as final output
         img_pred = img_pred[:, img_pred.size(1) // 2, img_pred.size(2) // 2, ...]

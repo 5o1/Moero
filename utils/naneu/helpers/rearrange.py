@@ -319,7 +319,7 @@ class TorchModuleForwardHook(torch.nn.Module):
 
     def forward(self, *args, **kwargs):
         args, kwargs = self.input_callbacks(*args, **kwargs)
-        output = self.module.forward(*args, **kwargs)
+        output = self.module(*args, **kwargs)
         output = self.output_callbacks(output)
         return output
             

@@ -3,7 +3,9 @@ from .promptunet import (
 )
 
 from .embedoutunet import (
-    EmbedOutUnet
+    EmbedOutUnet,
+    ConvEmbedModule,
+    VQEmbedModule,
 )
 
 from .unet import (

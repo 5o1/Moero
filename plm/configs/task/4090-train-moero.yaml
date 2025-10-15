@@ -1,4 +1,4 @@
-seed_everything: 5
+seed_everything: 42
 trainer:
   accelerator: gpu
   precision: 32
@@ -6,22 +6,22 @@ trainer:
   devices: [0, 2, 3, 4, 5, 6, 7]
   # accumulate_grad_batches: 2 #
   num_nodes: 1
-  max_epochs: 24
+  max_epochs: 8
   log_every_n_steps: 50 # log every n steps during training
   deterministic: false
   use_distributed_sampler: false # Use false because custom VolumeSamplers have been used
   logger: 
-    class_path: pytorch_lightning.loggers.WandbLogger
+    class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      project: cmr25
+      project: moero
       mode: online
-      save_dir: /home/hulabdl/exp
-      tags: [cmr25lab, moero]
+      save_dir: /home/lyy/exp
+      tags: [cmr25lab, moero-6, fastmri-mini]
       name: moero
   callbacks:
-    - class_path: pytorch_lightning.callbacks.ModelCheckpoint
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
-        monitor: validation_loss
+        monitor: val0/loss
         mode: min 
         save_top_k: 1 # -1 to save all checkpoints, 5 to save the top 5 checkpoints
         save_last: True # always save the last checkpoint
@@ -29,7 +29,7 @@ trainer:
     - class_path: plm.callbacks.MatmulPrecisionCallback
       init_args:
         precision: "high"  # Set to "high" for high precision matmul operations
-    - class_path: pytorch_lightning.callbacks.LearningRateMonitor
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
 
-# ckpt_path: 
+ckpt_path: null
 

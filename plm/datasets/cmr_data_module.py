@@ -1,4 +1,4 @@
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from os import PathLike
 from typing import List, Literal
 from utils.naneu.common.importlib import LazyModule

@@ -9,17 +9,11 @@ from einops import rearrange
 from einops.layers.torch import Rearrange
 
 class EmbedModule(nn.Module):
+    prompt_channels: int
+    embed_channels: int
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         raise NotImplementedError("This method should be implemented by subclasses.")
-
-    @property
-    def prompt_channels(self) -> int:
-        raise NotImplementedError("This method should be implemented by subclasses.")
     
-    @property
-    def embedding_channels(self) -> int:
-        raise NotImplementedError("This method should be implemented by subclasses.")
-
 
 class VQEmbedModule(EmbedModule):
     def __init__(
@@ -33,7 +27,7 @@ class VQEmbedModule(EmbedModule):
         ):
         super().__init__()
         self.prompt_channels = prompt_channels
-        self.embedding_channels = embedding_channels
+        self.embed_channels = embedding_channels
         self.vqblock = VQPromptBlock(in_channels, prompt_channels, embedding_channels, n_conv, reduction, decay).rearrange("b ref c h w -> (b ref) c h w", for_output = [0])
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -50,26 +44,27 @@ class ConvEmbedModule(EmbedModule):
             self,
             in_channels: int,
             prompt_channels: int,
-            embedding_channels: int,
+            embed_channels: int,
             n_conv:int = 3,
             kernel_size: int = 3,
         ):
         super().__init__()
         self.prompt_channels = prompt_channels
-        self.embedding_channels = embedding_channels
+        self.embed_channels = embed_channels
         self.conv = nn.Conv2d(in_channels, prompt_channels, kernel_size=kernel_size, padding="same", bias=False).rearrange("b ref c h w -> (b ref) c h w")
         _layers = []
         for i in range(n_conv):
             _layers.extend([
                 nn.InstanceNorm2d(prompt_channels, affine=True),
                 nn.ReLU(inplace=True),
-                nn.Conv2d(prompt_channels, embedding_channels if i == n_conv-1 else prompt_channels, kernel_size=kernel_size, padding="same", bias=False),
+                nn.Conv2d(prompt_channels, prompt_channels, kernel_size=kernel_size, padding="same", bias=False),
             ])
         self.embed = nn.Sequential(*_layers).rearrange("b ref c h w -> (b ref) c h w")
         self.pool = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             Rearrange("b c 1 1 -> b c")
         )
+        self.to_out = nn.Linear(prompt_channels, embed_channels, bias=True)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
@@ -78,6 +73,7 @@ class ConvEmbedModule(EmbedModule):
         prompt = self.conv(x)
         embedding = self.embed(prompt).mean(dim=1)
         embedding = self.pool(embedding)
+        embedding = self.to_out(embedding)
         return prompt, embedding, None
 
 
@@ -131,8 +127,8 @@ class EmbedOutUnet(nn.Module):
             dropout: float = 0.0,
             idx_cascade = None,
             n_history: int | None = None,
-            embed_module: EmbedModule = None,
             *,
+            embed_module: EmbedModule = None,
             bias: bool = True,
             norm: bool = False,
             history_norm: bool = False,

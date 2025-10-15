@@ -153,30 +153,28 @@ class LearnableBranchNav(BranchNav):
             self,
             in_channels: int,
             top_k: int = 2,
-            pool_size: int = 8,
-            reduction: int = 4,
+            poolsize: int = 8,
             eps = 1e-13,
             ema_decay: float = 0.99,
             balance_lambda: float = 1.0,
         ):
         super().__init__()
-        assert pool_size >= 1, "pool_size must be >= 1"
-        assert 1 <= top_k <= pool_size, "top_k must be in [1, pool_size]"
-        assert reduction >= 1, "reduction must be >= 1"
+        assert poolsize >= 1, "pool_size must be >= 1"
+        assert 1 <= top_k <= poolsize, "top_k must be in [1, pool_size]"
 
         self.eps = eps
         self.balance_lambda = balance_lambda
         self.ema_decay = ema_decay
         self.top_k = top_k
-        self.pool_size = pool_size
+        self.poolsize = poolsize
 
         self.head = nn.Sequential(
             nn.Linear(in_channels, in_channels),
             nn.ReLU(inplace=True),
-            nn.Linear(in_channels, pool_size),
+            nn.Linear(in_channels, poolsize),
         )
 
-        self.register_buffer("route_ema", torch.zeros((pool_size,), dtype=torch.float32))
+        self.register_buffer("route_ema", torch.zeros((poolsize,), dtype=torch.float32))
 
         # Init
         for m in self.modules():
