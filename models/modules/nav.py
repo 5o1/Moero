@@ -157,6 +157,7 @@ class LearnableBranchNav(BranchNav):
             eps = 1e-13,
             ema_decay: float = 0.99,
             balance_lambda: float = 1.0,
+            idx: int = 0,
         ):
         super().__init__()
         assert poolsize >= 1, "pool_size must be >= 1"
@@ -167,6 +168,7 @@ class LearnableBranchNav(BranchNav):
         self.ema_decay = ema_decay
         self.top_k = top_k
         self.poolsize = poolsize
+        self.idx = idx
 
         self.head = nn.Sequential(
             nn.Linear(in_channels, in_channels),
