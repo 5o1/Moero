@@ -39,7 +39,7 @@ model:
                 n_conv: 3
 
         branchnav_class_path: models.modules.nav.LearnableBranchNav
-        moe_poolsize:    [4, 4, 4, 4, 4, 4]
+        moe_poolsize:    [4, 4, 4, 4, 1, 1]
         moe_n_activated: [1, 1, 1, 1, 1, 1]
         moe_n_recurrent: [1, 1, 1, 1, 1, 1]
         moe_embed_channels: &moedim 1024
@@ -61,7 +61,6 @@ model:
               norm: false
               bias: false
               use_history: true
-              history_norm: true
               idx_cascade: 0
               n_cascade: 6
               embed_module:

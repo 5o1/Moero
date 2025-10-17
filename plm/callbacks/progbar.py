@@ -17,7 +17,8 @@ class MultiColumnMetricsTextColumn(MetricsTextColumn):
 class MultiColumnTextDelimiter:
     def __init__(self, ncols: int = 5):
         self.ncols = ncols
-        self.nrows = None
+        self.nrows_cache = None
+        self.nrows_cache = None
         self.keys_cache = None
 
     def _build_node(self, parent: dict, child_string: List[str]) -> Dict[str, dict]:
@@ -45,7 +46,6 @@ class MultiColumnTextDelimiter:
             del root["leaves"][child["prefix"]]
             for item in child["children_squeezed"]:
                 node["children_squeezed"].append(name + item)
-        node["children_squeezed"]
         node["children"] = {}
         root["leaves"][node["prefix"]] = node
         return node
@@ -59,22 +59,22 @@ class MultiColumnTextDelimiter:
         for name in prefix_string:
             self._build_node(root, name)
 
-        # Squeeze leaf nodes
-        while len(root["leaves"]) > ngroup_minmax[1] > 1: 
-            leaf_groupmax = max(
-                [leaf for leaf in root["leaves"].values() if all(len(child["children"]) == 0 for child in leaf["parent"]["children"].values())], # homogeneous leaf node
-                key=lambda x: len(x["parent"]["children"]) + len(x["parent"]["children_squeezed"])
-                )
-            parent_leaf_groupmax = leaf_groupmax["parent"]
-            nchildren_max = len(parent_leaf_groupmax["children"])
-            if (len(root["leaves"]) - nchildren_max) < ngroup_minmax[0]:
-                break
-            # Squeeze
-            self._squeeze(parent_leaf_groupmax)
-
         # Squeeze any leaf end with not alphabet
         while len(root["leaves"]) > 1 and len(end_with_notalpha:= [leaf for leaf in root["leaves"].values() if not leaf["prefix"][-1].isalpha()]) > 1:
             self._squeeze(end_with_notalpha[0]["parent"])
+
+        # Squeeze leaf nodes
+        while len(root["leaves"]) > ngroup_minmax[1] > 1: 
+            candidate = min(
+                [leaf for leaf in root["leaves"].values() if all(len(child["children"]) == 0 for child in leaf["parent"]["children"].values())], # homogeneous leaf node
+                key=lambda x: len(x["parent"]["children"]) + len(x["parent"]["children_squeezed"])
+                )
+            parent_candidate = candidate["parent"]
+            nchildren = len(parent_candidate["children"])
+            if (len(root["leaves"]) - nchildren) < ngroup_minmax[0]:
+                break
+            # Squeeze
+            self._squeeze(parent_candidate)
 
         groups = {leaf["prefix"]: [leaf["prefix"] + item for item in leaf["children_squeezed"]] for leaf in root["leaves"].values()}
         return groups
@@ -88,7 +88,7 @@ class MultiColumnTextDelimiter:
         
 
         sorted_names = sorted(raw_groups.keys())
-        if self.keys_cache is None or sorted_names != self.keys_cache or self.nrows is None:
+        if self.keys_cache is None or sorted_names != self.keys_cache or self.nrows_cache is None:
 
             # Try to reduce it to `ncols` groups.
             self.groups = self._cluster(list(raw_groups.keys()), (max(1, self.ncols - 2), self.ncols))
@@ -106,12 +106,12 @@ class MultiColumnTextDelimiter:
             # Format table
             self.column_keys = sorted(self.groups.keys(), key = lambda groupname: (len(self.groups[groupname]), groupname),reverse=True)
             self.groups = {key: sorted(self.groups[key], key=lambda x: (len(x), x)) for key in self.column_keys}
-            self.ncols = len(self.column_keys)
-            self.nrows = max(len(self.groups[key]) for key in self.column_keys)
+            self.ncols_cache = len(self.column_keys)
+            self.nrows_cache = max(len(self.groups[key]) for key in self.column_keys)
         
         # Fill table
-        table = [["" for _ in range(self.ncols)] for _ in range(self.nrows)]
-        col_widths = [0] * self.ncols
+        table = [["" for _ in range(self.ncols_cache)] for _ in range(self.nrows_cache)]
+        col_widths = [0] * self.ncols_cache
         for col_index, key in enumerate(self.column_keys):
             for row_index, name in enumerate(self.groups[key]):
                 cell = raw_groups[name]

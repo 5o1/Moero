@@ -1,8 +1,9 @@
-from typing import List, Optional
+from typing import List, Optional, Literal
 import torch
+from functools import partial
 from torch import nn
 import math
-from ..modules.conv import DownBlock, CABChain, PromptUpBlock, CAB, UpBlock
+from ..modules.conv import DownBlock, CABChain, PromptUpBlock, CAB, UpBlock, SelfFiLM
 from ..modules.prompt import PromptBlock, VQPromptBlock
 from utils.naneu.helpers.context import register_extra_output, register_extra_loss
 from utils.naneu.helpers.rearrange import TorchModuleForwardHook # Don't touch this import
@@ -34,6 +35,7 @@ class VQEmbedModule(EmbedModule):
             decay: float = 0.99,
         ):
         super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.prompt_channels = prompt_channels
         self.embed_channels = embedding_channels
         self.vqblock = VQPromptBlock(in_channels, prompt_channels, embedding_channels, n_conv, reduction, decay).rearrange("b ref c h w -> (b ref) c h w", for_output = [0])
@@ -45,7 +47,7 @@ class VQEmbedModule(EmbedModule):
         prompt, loss, embedding = self.vqblock(x)
         embedding = rearrange(embedding, "(b ref) words -> b ref words", b = x.size(0), ref = x.size(1)).mean(1)
         return prompt, embedding, loss
-    
+
 
 class ConvEmbedModule(EmbedModule):
     def __init__(
@@ -151,7 +153,7 @@ class EmbedOutUnet(nn.Module):
             bias: bool = True,
             norm: bool = False,
             use_history: bool = True,
-            history_norm: bool = False,
+            history_norm: Literal["norm", "film"] | None = None,
         ):
         self.depth = len(pyramid_channels) - 1
         self.use_figprompt = True if prompt_tokens is not None and prompt_channels is not None and prompt_figsize is not None else False
@@ -223,12 +225,12 @@ class EmbedOutUnet(nn.Module):
                 for i in range(self.depth)
             ])
             self.dec = torch.nn.ModuleList([
-                PromptUpBlock(pyramid_channels[i + 1], pyramid_channels[i], prompt_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias, history_norm=history_norm).rearrange("b ref c h w -> (b ref) c h w")
+                PromptUpBlock(pyramid_channels[i + 1], pyramid_channels[i], prompt_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
                 for i in range(self.depth)
             ])
         else:
             self.dec = torch.nn.ModuleList([
-                UpBlock(pyramid_channels[i + 1], pyramid_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias, history_norm=history_norm).rearrange("b ref c h w -> (b ref) c h w")
+                UpBlock(pyramid_channels[i + 1], pyramid_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
                 for i in range(self.depth)
             ])
 
@@ -240,9 +242,15 @@ class EmbedOutUnet(nn.Module):
                     for i in range(self.depth)
                 ])
             if not self.is_first:
+                if history_norm == "norm":
+                    norm_layer = partial(nn.InstanceNorm2d, affine=True)
+                elif history_norm == "film":
+                    norm_layer = partial(SelfFiLM, bias = True)
+                else:
+                    raise ValueError(f"Unsupported history_norm: {history_norm}. Supported values are 'norm' and 'film'.")
                 self.cache_to_input = nn.ModuleList([
                     nn.Sequential(
-                        nn.InstanceNorm2d(math.ceil(pyramid_channels[i + 1] // 2) * self.n_history),
+                        norm_layer(math.ceil(pyramid_channels[i + 1] // 2) * self.n_history),
                         nn.Conv2d(math.ceil(pyramid_channels[i + 1] // 2) * self.n_history, pyramid_channels[i + 1] * self.n_history, kernel_size=1, bias=True)
                     ).rearrange("b ref c h w -> (b ref) c h w")
                     for i in range(self.depth)

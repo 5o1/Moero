@@ -72,9 +72,9 @@ class Cmr25Module(MriModule):
             total_loss = loss
             if len(ctx_loss_dict:= ctx.get_losses()) > 0:
                 for loss_name, loss_score in ctx_loss_dict.items():
-                    self.log(f"train/{loss_name}", loss_score.detach(), prog_bar=True)
                     total_loss += loss_score
-
+                    self.log(f"train/{loss_name}", loss_score.detach(), prog_bar=True)
+                    
             if self.fine_tuning:
                 vgg_loss = self.perceptual_fn(output, target)
                 total_loss += vgg_loss
