@@ -243,12 +243,10 @@ class Moero(nn.Module):
             branchnav_class(
                 in_channels = moe_embed_channels,
                 poolsize = moe_poolsize[icascade],
-                top_k = moe_n_activated[icascade]
+                top_k = moe_n_activated[icascade],
+                idx = icascade
             ) for icascade in range(len(cascades))
         ]) # (n_cascades, Branchnav)
-
-        for i in range(len(self.branchnavs)):
-            self.branchnavs[i].idx=i
     
     def sync_embed_module_share_state(self):
         """

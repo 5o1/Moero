@@ -3,7 +3,7 @@ from torch import nn
 from torch_kmeans import KMeans, CosineSimilarity, DotProductSimilarity, ClusterResult
 from . import dist as dist_fn
 from torch import LongTensor, Tensor
-from utils.naneu.helpers.context import register_extra_metric
+from utils.naneu.helpers.context import register_extra_metric, register_extra_loss
 from einops.layers.torch import Rearrange
 from math import ceil
 from .dist import all_reduce
@@ -157,6 +157,9 @@ class LearnableBranchNav(BranchNav):
             eps = 1e-13,
             ema_decay: float = 0.99,
             balance_lambda: float = 1.0,
+            z_loss_coef: float = 1e-3,
+            aux_loss_coef: float = 1e-2,
+            idx: int = 0,
         ):
         super().__init__()
         assert poolsize >= 1, "pool_size must be >= 1"
@@ -167,13 +170,16 @@ class LearnableBranchNav(BranchNav):
         self.ema_decay = ema_decay
         self.top_k = top_k
         self.poolsize = poolsize
+        self.z_loss_coef = z_loss_coef
+        self.aux_loss_coef = aux_loss_coef
+        self.idx = idx
 
         self.head = nn.Sequential(
             nn.Linear(in_channels, in_channels),
             nn.ReLU(inplace=True),
             nn.Linear(in_channels, poolsize),
         )
-
+        self.wnoise = nn.Linear(in_channels, poolsize)
         self.register_buffer("route_ema", torch.zeros((poolsize,), dtype=torch.float32))
 
         # Init
@@ -203,22 +209,59 @@ class LearnableBranchNav(BranchNav):
         log_prior = -torch.log(usage)                    # higher for rarely used experts
         return self.balance_lambda * log_prior           # [pool_size]
 
+
+    def focus_metric(self, route_count: Tensor) -> Tensor:
+        """
+        Calculate focus metric from route counts. Entropy-based, normalized to [0, 1].
+        """
+        route_count = route_count.float()
+        route_freq = route_count / (route_count.sum() + self.eps)
+        entropy = -(route_freq * (route_freq + self.eps).log()).sum()
+        entropy_max = torch.log(torch.tensor(float(self.poolsize), device=route_count.device))
+        entropy_norm = entropy / (entropy_max + self.eps)
+        focus = 1.0 - entropy_norm
+        return focus
+
     def forward(
         self,
         x: torch.Tensor,
     ) -> Tuple[Tensor, Tensor, LongTensor]:
+        x_detached = x.detach()
+
         # CNN -> GAP -> logits
         logits: torch.Tensor = self.head(x)        # [B, pool_size]
+        logits_detached: torch.Tensor = self.head(x_detached)  # [B, pool_size]
+
+        # z-loss
+        if self.training and self.poolsize > 1 and self.z_loss_coef > 0.0:
+            z_loss = torch.logsumexp(logits_detached.float(), dim=-1) ** 2 * self.z_loss_coef  # [B]
+            register_extra_loss(self, f"route_zloss{self.idx}", z_loss.mean())
 
         # Add EMA-based balancing prior in logits space
-        logits_adj = logits + self._balancing_prior().unsqueeze(0).to(logits.device, logits.dtype)
+        prior = self._balancing_prior().unsqueeze(0).to(logits.device, logits.dtype)
+        logits = logits + prior
+        logits_detached = logits_detached + prior
+
+        if self.training:
+            logits_topk = logits + torch.randn_like(logits) * (nn.functional.softplus(self.wnoise(x)) + self.eps)  # [B, pool_size]
+        else:
+            logits_topk = logits
 
         # Compute softmax over all experts (differentiable for every logit)
-        prob_all = torch.softmax(logits_adj.float(), dim=-1).to(logits_adj.dtype)  # [B, pool_size]
+        prob_all = torch.softmax(logits.float(), dim=-1).to(logits.dtype)  # [B, pool_size]
+        prob_all_detached = torch.softmax(logits_detached.float(), dim=-1).to(logits_detached.dtype)  # [B, pool_size]
+
+        # auxiliary loss
+        if self.training and self.poolsize > 1 and self.aux_loss_coef > 0.0:
+            route_count = self.route_ema.float()
+            route_freq = route_count / (route_count.sum() + self.eps)
+            aux_loss = (route_freq * prob_all_detached).sum(dim=-1).mean() * self.aux_loss_coef
+            register_extra_loss(self, f"route_auxloss{self.idx}", aux_loss)
+            
 
         # Top-k indices/mask for hard dispatch
-        topk = torch.topk(logits_adj, k=self.top_k, dim=-1, largest=True, sorted=False)
-        topk_mask = torch.zeros_like(logits_adj).scatter_(dim=-1, index=topk.indices, value=1.0)  # [B, pool_size]
+        topk = torch.topk(logits_topk, k=self.top_k, dim=-1, largest=True, sorted=False)
+        topk_mask = torch.zeros_like(logits).scatter_(dim=-1, index=topk.indices, value=1.0)  # [B, pool_size]
 
         # Sparse weights = soft probabilities masked by top-k
         prob_weights = prob_all * topk_mask  # [B, pool_size]
@@ -228,10 +271,14 @@ class LearnableBranchNav(BranchNav):
         prob_weights = prob_weights / denom  # [B, pool_size]
 
         # Update frequency stats
-        if self.training:
+        if self.training and self.poolsize > 1:
             with torch.no_grad():
                 batch_select = topk_mask.sum(dim=0) # [pool_size], how many times each expert chosen
                 all_reduce(batch_select)
                 self.route_ema.mul_(self.ema_decay).add_((1 - self.ema_decay) * batch_select) # EMA update
+
+                # Logging
+                focus_score = self.focus_metric(self.route_ema)
+                register_extra_metric(self, f"route_focus{self.idx}", focus_score, op="mean")
 
         return prob_weights, topk_mask, topk.indices

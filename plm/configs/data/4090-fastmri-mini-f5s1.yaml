@@ -4,7 +4,7 @@ data:
     num_workers: 8
 
     train_config:
-      path: /home/lyy/dataset/fastmri-knee/knee-train
+      path: /home/lyy/dataset/fastmri-mini/knee-train
       dataset_class: &datasetclasspath datasets.CmrDatasetBase
       dataset_init_args: &traininitargs
         n_adj_frame: 5
@@ -19,7 +19,7 @@ data:
 
     val_configs:
 
-      - path: /home/lyy/dataset/fastmri-knee/knee-val
+      - path: /home/lyy/dataset/fastmri-mini/knee-val
         dataset_class: *datasetclasspath
         dataset_init_args:
           <<: *traininitargs
@@ -30,7 +30,7 @@ data:
               n_calibs: [20],
             }
 
-      - path: /home/lyy/dataset/fastmri-knee/knee-val
+      - path: /home/lyy/dataset/fastmri-mini/knee-val
         dataset_class: *datasetclasspath
         dataset_init_args:
           <<: *traininitargs
@@ -41,7 +41,7 @@ data:
               n_calibs: [20],
             }
 
-      - path: /home/lyy/dataset/fastmri-knee/knee-val
+      - path: /home/lyy/dataset/fastmri-mini/knee-val
         dataset_class: *datasetclasspath
         dataset_init_args:
           <<: *traininitargs

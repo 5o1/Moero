@@ -1,7 +1,9 @@
-from typing import List, Optional
+from typing import List, Optional, Literal
 import torch
+from functools import partial
 from torch import nn
-from ..modules.conv import DownBlock, CABChain, PromptUpBlock, CAB, UpBlock
+import math
+from ..modules.conv import DownBlock, CABChain, PromptUpBlock, CAB, UpBlock, SelfFiLM
 from ..modules.prompt import PromptBlock, VQPromptBlock
 from utils.naneu.helpers.context import register_extra_output, register_extra_loss
 from utils.naneu.helpers.rearrange import TorchModuleForwardHook # Don't touch this import
@@ -11,7 +13,14 @@ from einops.layers.torch import Rearrange
 class EmbedModule(nn.Module):
     prompt_channels: int
     embed_channels: int
+    def __init__(self):
+        super().__init__()
+        self.is_last = False
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        raise NotImplementedError("This method should be implemented by subclasses.")
+    
+    def set_last(self) -> None:
         raise NotImplementedError("This method should be implemented by subclasses.")
     
 
@@ -26,6 +35,7 @@ class VQEmbedModule(EmbedModule):
             decay: float = 0.99,
         ):
         super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.prompt_channels = prompt_channels
         self.embed_channels = embedding_channels
         self.vqblock = VQPromptBlock(in_channels, prompt_channels, embedding_channels, n_conv, reduction, decay).rearrange("b ref c h w -> (b ref) c h w", for_output = [0])
@@ -37,7 +47,7 @@ class VQEmbedModule(EmbedModule):
         prompt, loss, embedding = self.vqblock(x)
         embedding = rearrange(embedding, "(b ref) words -> b ref words", b = x.size(0), ref = x.size(1)).mean(1)
         return prompt, embedding, loss
-    
+
 
 class ConvEmbedModule(EmbedModule):
     def __init__(
@@ -66,15 +76,25 @@ class ConvEmbedModule(EmbedModule):
         )
         self.to_out = nn.Linear(prompt_channels, embed_channels, bias=True)
 
+    def set_last(self):
+        self.is_last = True
+        del self.embed
+        del self.pool
+        del self.to_out
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
         x : b ref c h w
         """
         prompt = self.conv(x)
-        embedding = self.embed(prompt).mean(dim=1)
-        embedding = self.pool(embedding)
-        embedding = self.to_out(embedding)
-        return prompt, embedding, None
+        if self.is_last:
+            embedding = torch.zeros(x.size(0), self.embed_channels, device=x.device, dtype=x.dtype)
+            return prompt, embedding, None
+        else:
+            embedding = self.embed(prompt).mean(dim=1)
+            embedding = self.pool(embedding)
+            embedding = self.to_out(embedding)
+            return prompt, embedding, None
 
 
 class SkipBlock(nn.Module):
@@ -125,13 +145,15 @@ class EmbedOutUnet(nn.Module):
             kernel_size: int = 3,
             reduction: float | int = 2,
             dropout: float = 0.0,
-            idx_cascade = None,
+            idx_cascade: int | None = None,
+            n_cascade: int | None = None,
             n_history: int | None = None,
             *,
             embed_module: EmbedModule = None,
             bias: bool = True,
             norm: bool = False,
-            history_norm: bool = False,
+            use_history: bool = True,
+            history_norm: Literal["norm", "film"] | None = None,
         ):
         self.depth = len(pyramid_channels) - 1
         self.use_figprompt = True if prompt_tokens is not None and prompt_channels is not None and prompt_figsize is not None else False
@@ -158,6 +180,15 @@ class EmbedOutUnet(nn.Module):
 
         super().__init__()
         self.idx_cascade = idx_cascade
+        self.use_history = use_history
+        self.history_norm = history_norm
+
+        self.is_first = False
+        self.is_last = False
+        if idx_cascade is not None and n_cascade is not None:
+            self.is_first = (idx_cascade == 0)
+            self.is_last = (idx_cascade == n_cascade - 1)
+
         if n_history is None:
             if idx_cascade is None:
                 self.n_history = 0
@@ -183,6 +214,8 @@ class EmbedOutUnet(nn.Module):
 
         # Bottleneck
         self._embed_module = embed_module
+        if self.is_last:
+            self._embed_module.set_last()
         self.bottleneck = BottleNeck(pyramid_channels[self.depth], self._embed_module.prompt_channels, n_skip_cab[self.depth], kernel_size, reduction, dropout, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
 
         # Decoder - UpBlocks
@@ -192,15 +225,36 @@ class EmbedOutUnet(nn.Module):
                 for i in range(self.depth)
             ])
             self.dec = torch.nn.ModuleList([
-                PromptUpBlock(pyramid_channels[i + 1], pyramid_channels[i], prompt_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias, history_norm=history_norm).rearrange("b ref c h w -> (b ref) c h w")
+                PromptUpBlock(pyramid_channels[i + 1], pyramid_channels[i], prompt_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
                 for i in range(self.depth)
             ])
         else:
             self.dec = torch.nn.ModuleList([
-                UpBlock(pyramid_channels[i + 1], pyramid_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias, history_norm=history_norm).rearrange("b ref c h w -> (b ref) c h w")
+                UpBlock(pyramid_channels[i + 1], pyramid_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, self.n_history, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
                 for i in range(self.depth)
             ])
 
+        # Feature cache adapters
+        if history_norm and use_history:
+            if not self.is_last:
+                self.cache_to_output = nn.ModuleList([
+                    nn.Conv2d(pyramid_channels[i + 1], math.ceil(pyramid_channels[i + 1] // 2), kernel_size=1, bias=True).rearrange("b ref c h w -> (b ref) c h w")
+                    for i in range(self.depth)
+                ])
+            if not self.is_first:
+                if history_norm == "norm":
+                    norm_layer = partial(nn.InstanceNorm2d, affine=True)
+                elif history_norm == "film":
+                    norm_layer = partial(SelfFiLM, bias = True)
+                else:
+                    raise ValueError(f"Unsupported history_norm: {history_norm}. Supported values are 'norm' and 'film'.")
+                self.cache_to_input = nn.ModuleList([
+                    nn.Sequential(
+                        norm_layer(math.ceil(pyramid_channels[i + 1] // 2) * self.n_history),
+                        nn.Conv2d(math.ceil(pyramid_channels[i + 1] // 2) * self.n_history, pyramid_channels[i + 1] * self.n_history, kernel_size=1, bias=True)
+                    ).rearrange("b ref c h w -> (b ref) c h w")
+                    for i in range(self.depth)
+                ])
 
         # OutConv
         self.to_output = nn.Conv2d(pyramid_channels[0], out_channels, 5, padding="same", bias=bias).rearrange("b ref c h w -> (b ref) c h w")
@@ -210,7 +264,7 @@ class EmbedOutUnet(nn.Module):
         Real. Complex dimension have bound to channel dimension.
         x : b ref c h w
         """
-        if history is None:
+        if history is None or not self.use_history:
             history = [None for _ in range(self.depth)]
         else:
             n_cached = len(history[0])
@@ -218,10 +272,14 @@ class EmbedOutUnet(nn.Module):
                 raise ValueError(f"History must be a list of lists with the same length. Got {[len(h) for h in history]}.")
             if n_cached == 0: # Initialization
                 history = [None for _ in range(self.depth)]
-            elif n_cached < self.n_history: # Padding by first history
-                history = [torch.cat(h[:1] * (self.n_history - n_cached) + h, dim=-3)  for h in history]
-            else: # Use last self.n_history history
-                history = [torch.cat(h[-self.n_history:], dim=-3) for h in history]
+            else:
+                if n_cached < self.n_history: # Padding by first history
+                    history = [torch.cat(h[:1] * (self.n_history - n_cached) + h, dim=-3)  for h in history]
+                else: # Use last self.n_history history
+                    history = [torch.cat(h[-self.n_history:], dim=-3) for h in history]
+                # History norm
+                if self.history_norm and not self.is_first:
+                    history = [self.cache_to_input[i](history[i]) for i in range(self.depth)]
 
         cache = [None for _ in range(self.depth)]
         residual = [None for _ in range(self.depth)]
@@ -239,7 +297,7 @@ class EmbedOutUnet(nn.Module):
 
         # 3. decoder
         for i in range(self.depth - 1, -1, -1):
-            cache[i] = x.clone()
+            cache[i] = self.cache_to_output[i](x) if self.history_norm and self.use_history and not self.is_last else x
             x = self.dec[i](x, self.prompt[i](x), self.skip[i](residual[i]), history[i])
 
         x = self.to_output(x)

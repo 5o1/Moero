@@ -39,8 +39,8 @@ model:
                 n_conv: 3
 
         branchnav_class_path: models.modules.nav.LearnableBranchNav
-        moe_poolsize:    [1, 1, 8, 8, 8, 1]
-        moe_n_activated: [1, 1, 2, 2, 2, 1]
+        moe_poolsize:    [4, 4, 4, 4, 1, 1]
+        moe_n_activated: [1, 1, 1, 1, 1, 1]
         moe_n_recurrent: [1, 1, 1, 1, 1, 1]
         moe_embed_channels: &moedim 1024
             
@@ -49,9 +49,9 @@ model:
             init_args: &cascadebase
               in_channels: 50
               out_channels: 50
-              pyramid_channels: [24, 36, 42, 60]
+              pyramid_channels: [32, 48, 64, 80]
               prompt_tokens: [8, 8, 8]
-              prompt_channels: [10, 20, 30]
+              prompt_channels: [24, 32, 40]
               prompt_figsize: [64, 32, 16]
               n_enc_cab: [2, 3, 3]
               n_dec_cab: [2, 2, 3]
@@ -60,12 +60,13 @@ model:
               n_history: 6
               norm: false
               bias: false
-              history_norm: false
+              use_history: true
               idx_cascade: 0
+              n_cascade: 6
               embed_module:
                 class_path: models.backbones.ConvEmbedModule
                 init_args:
-                  in_channels: 60
+                  in_channels: 80
                   prompt_channels: 20
                   embed_channels: *moedim
                   n_conv: 3

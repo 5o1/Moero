@@ -42,19 +42,15 @@ class UpBlock(nn.Module):
             self, in_channels: int, out_channels: int, n_cab: int, kernel_size: int, reduction: int, dropout: float, n_history: int = 0,
             *,
             norm: bool = False, bias: bool = True,
-            history_norm:bool = False
         ):
         super().__init__()
         self.n_history = n_history
-        self.is_history_norm = history_norm
 
         if n_history > 0:
             self.momentum = nn.Sequential(
                 nn.Conv2d(in_channels * (n_history + 1), in_channels, kernel_size=1, padding="same", bias = bias),
                 CAB(in_channels, kernel_size, reduction, dropout, norm = norm, bias = bias)
             )
-            if history_norm:
-                self.history_norm = nn.InstanceNorm2d(in_channels * (n_history), affine=True)
 
         self.up = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
@@ -69,8 +65,6 @@ class UpBlock(nn.Module):
             elif (history.size(-3) % self.n_history != 0) or (history.size(-3) // self.n_history != x.size(-3)):
                 raise ValueError(f"Unexpected history size: {history.size(-3)}. Expected to be a multiple of {self.n_history} times the channels of x: {x.size(-3)}.")
             else:
-                if self.is_history_norm:
-                    history = self.history_norm(history)
                 x = torch.cat([x, history], dim=-3)
             x = self.momentum(x)
         x = self.up(x)
@@ -86,19 +80,15 @@ class PromptUpBlock(nn.Module):
             self, in_channels: int, out_channels: int, prompt_channels: int, n_cab: int, kernel_size: int, reduction: int, dropout: float, n_history: int = 0,
             *,
             norm: bool = False, bias: bool = True,
-            history_norm:bool = False
         ):
         super().__init__()
         self.n_history = n_history
-        self.is_history_norm = history_norm
 
         if n_history > 0:
             self.momentum = nn.Sequential(
                 nn.Conv2d(in_channels * (n_history + 1), in_channels, kernel_size=1, padding="same", bias = bias),
                 CAB(in_channels, kernel_size, reduction, dropout, norm = norm, bias = bias)
             )
-            if history_norm:
-                self.history_norm = nn.InstanceNorm2d(in_channels * (n_history), affine=True)
 
         self.fuse = nn.Sequential(
             CABChain(in_channels+prompt_channels, n_cab, kernel_size, reduction, dropout, norm = norm, bias = bias)
@@ -119,8 +109,6 @@ class PromptUpBlock(nn.Module):
             elif (history.size(-3) % self.n_history != 0) or (history.size(-3) // self.n_history != x.size(-3)):
                 raise ValueError(f"Unexpected history size: {history.size(-3)}. Expected to be a multiple of {self.n_history} times the channels of x: {x.size(-3)}.")
             else:
-                if self.is_history_norm:
-                    history = self.history_norm(history)
                 x = torch.cat([x, history], dim=-3)
             x = self.momentum(x)
 
@@ -153,6 +141,41 @@ class CALayer(nn.Module):
         y = self.avg_pool(x)
         y = self.down_up(y)
         return x * y
+
+class FiLM(nn.Module):
+    def __init__(
+            self, in_channels: int, condition_channels: int,
+            *,
+            bias: bool = True
+        ):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.to_scale = nn.Conv2d(condition_channels, in_channels, kernel_size=1, bias = bias)
+        self.to_shift = nn.Conv2d(condition_channels, in_channels, kernel_size=1, bias = bias)
+
+    def forward(self, x, condition):
+        condition = self.avg_pool(condition)
+        x_scale = self.to_scale(condition)
+        x_shift = self.to_shift(condition)
+        return x * x_scale + x_shift
+    
+
+class SelfFiLM(nn.Module):
+    def __init__(
+            self, in_channels: int,
+            *,
+            bias: bool = True
+        ):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.to_scale = nn.Conv2d(in_channels, in_channels, kernel_size=1, bias = bias)
+        self.to_shift = nn.Conv2d(in_channels, in_channels, kernel_size=1, bias = bias)
+
+    def forward(self, x):
+        condition = self.avg_pool(x)
+        x_scale = self.to_scale(condition)
+        x_shift = self.to_shift(condition)
+        return x * x_scale + x_shift
 
 
 class CAB(nn.Module):
