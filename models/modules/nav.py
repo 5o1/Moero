@@ -226,21 +226,17 @@ class LearnableBranchNav(BranchNav):
         self,
         x: torch.Tensor,
     ) -> Tuple[Tensor, Tensor, LongTensor]:
-        x_detached = x.detach()
-
         # CNN -> GAP -> logits
         logits: torch.Tensor = self.head(x)        # [B, pool_size]
-        logits_detached: torch.Tensor = self.head(x_detached)  # [B, pool_size]
 
         # z-loss
         if self.training and self.poolsize > 1 and self.z_loss_coef > 0.0:
-            z_loss = torch.logsumexp(logits_detached.float(), dim=-1) ** 2 * self.z_loss_coef  # [B]
+            z_loss = torch.logsumexp(logits.float(), dim=-1) ** 2 * self.z_loss_coef  # [B]
             register_extra_loss(self, f"route_zloss{self.idx}", z_loss.mean())
 
         # Add EMA-based balancing prior in logits space
         prior = self._balancing_prior().unsqueeze(0).to(logits.device, logits.dtype)
         logits = logits + prior
-        logits_detached = logits_detached + prior
 
         if self.training:
             logits_topk = logits + torch.randn_like(logits) * (nn.functional.softplus(self.wnoise(x)) + self.eps)  # [B, pool_size]
@@ -249,13 +245,12 @@ class LearnableBranchNav(BranchNav):
 
         # Compute softmax over all experts (differentiable for every logit)
         prob_all = torch.softmax(logits.float(), dim=-1).to(logits.dtype)  # [B, pool_size]
-        prob_all_detached = torch.softmax(logits_detached.float(), dim=-1).to(logits_detached.dtype)  # [B, pool_size]
 
         # auxiliary loss
         if self.training and self.poolsize > 1 and self.aux_loss_coef > 0.0:
             route_count = self.route_ema.float()
             route_freq = route_count / (route_count.sum() + self.eps)
-            aux_loss = (route_freq * prob_all_detached).sum(dim=-1).mean() * self.aux_loss_coef
+            aux_loss = (route_freq * prob_all).sum(dim=-1).mean() * self.aux_loss_coef
             register_extra_loss(self, f"route_auxloss{self.idx}", aux_loss)
             
 
