@@ -17,8 +17,8 @@ model:
         csm_model:
           class_path: models.backbones.EmbedOutUnet
           init_args:
-            in_channels: 10
-            out_channels: 10
+            in_channels: 2
+            out_channels: 2
             pyramid_channels: [8, 12, 16, 20]
             prompt_tokens: [8, 8, 8]
             prompt_channels: [6, 8, 10]
@@ -39,7 +39,7 @@ model:
                 n_conv: 3
 
         branchnav_class_path: models.modules.nav.LearnableBranchNav
-        moe_poolsize:    [4, 4, 4, 4, 1, 1]
+        moe_poolsize:    [1, 1, 1, 1, 1, 1]
         moe_n_activated: [1, 1, 1, 1, 1, 1]
         moe_n_recurrent: [1, 1, 1, 1, 1, 1]
         moe_embed_channels: &moedim 1024
@@ -47,8 +47,8 @@ model:
         cascades: 
           - class_path: models.backbones.EmbedOutUnet
             init_args: &cascadebase
-              in_channels: 50
-              out_channels: 50
+              in_channels: 10
+              out_channels: 10
               pyramid_channels: [32, 48, 64, 80]
               prompt_tokens: [8, 8, 8]
               prompt_channels: [24, 32, 40]

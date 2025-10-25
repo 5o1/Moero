@@ -7,7 +7,6 @@ from utils.naneu.helpers.context import register_extra_output, register_extra_me
 from utils.algos.acs import find_max_square
 from utils.complex import interpolate
 from .modules.format import Format4Unet2d
-from .modules.complex import ComplexGaussianBlur
 from data.transforms.crop import center_crop, make_center_mask
 
 
@@ -113,18 +112,12 @@ class SenseBlock(nn.Module):
     def __init__(
             self,
             model: nn.Module,
-            use_noise: bool = False
             ):
         super().__init__()
         self.model = model.view_as_real(for_input = [0], for_output = [0]).rearrange("b ref adj c h w two-> b ref (adj c two) h w", for_input = [0], for_output = [0])
-        self.use_noise = use_noise
 
         self.norm: Format4Unet2d = Format4Unet2d(ndownsample=self.model.depth, is_resize=False)
         self.dc_weight = nn.Parameter(torch.tensor(1.0, dtype = torch.float32))  # DC weight for the model
-
-        if self.use_noise:
-            # self.noise_filter = ComplexGaussianBlur(kernel_size=5, sigma=1.5, is_magnitude=True, is_phase=True)
-            pass
 
     def sense_expand(self, img: torch.Tensor, csm: torch.Tensor) -> torch.Tensor:
         return fft.itok(img * csm)
@@ -136,10 +129,8 @@ class SenseBlock(nn.Module):
         self,
         current_img: torch.Tensor,
         img_zf: torch.Tensor,
-        latent: torch.Tensor,
         mask: torch.Tensor,
         csm: torch.Tensor,
-        history_feat: Tuple[torch.Tensor, ...] | None = None,
     ):
         """
         complex
@@ -148,30 +139,15 @@ class SenseBlock(nn.Module):
         ffx = self.sense_reduce(self.sense_expand(current_img, csm) * mask, csm)
         # buffer: A^H(A(x)), s_i, x0
         # Note: `ffx - img_zf` greatly enhances noise and is therefore discarded
-        current_img_with_buffer = [current_img, ffx, latent, img_zf]
-        raw_nchannels = [x.size(-3) for x in current_img_with_buffer]
-        current_img_with_buffer = torch.cat(current_img_with_buffer, dim=-3)
-
-        if self.use_noise:
-            noise = ffx - img_zf
-            # noise = self.noise_filter(noise) # Try to denoise the noise
 
         # Normalize
-        current_img_with_buffer = self.norm(current_img_with_buffer)
-        if self.use_noise:
-            noise = self.norm(noise, is_fit = False)
-            raw_nchannels = raw_nchannels + [noise.size(-3)]
-            current_img_with_buffer = torch.cat([current_img_with_buffer, noise], dim=-3)
+        model_input = self.norm(current_img)
 
         # Model forward pass
-        model_term_with_buffer, feat_cached = self.model(current_img_with_buffer, history_feat)[:2]
+        model_term = self.model(model_input)
 
         # Restore from normalization
-        model_term_with_buffer = self.norm.adjoint(model_term_with_buffer)
-
-        # Split
-        model_term_with_buffer = torch.split(model_term_with_buffer, raw_nchannels, dim=-3)
-        model_term, latent = model_term_with_buffer[0], model_term_with_buffer[2]
+        model_term = self.norm.adjoint(model_term)
 
         # DC
         dc_weight = self.dc_weight
@@ -182,7 +158,7 @@ class SenseBlock(nn.Module):
                 register_extra_metric(self, f"dc_weight_max", dc_weight.detach(), op ="max")
                 register_extra_metric(self, f"dc_weight_min", dc_weight.detach(), op ="min")
 
-        return current_img, latent, feat_cached
+        return current_img
 
 
 class Varnet(nn.Module):
@@ -222,16 +198,6 @@ class Varnet(nn.Module):
         img = (img.abs() ** 2).sum(dim=-3, keepdim=True).sqrt()  # (b, 1, h, w)
         return img
 
-    # def phase_preprocess(self, tensor: torch.Tensor) -> torch.Tensor:
-    #     """
-    #     Preprocess the phase of the tensor by applying a Gaussian blur.
-    #     tensor: (b, ref, adj, c, h, w) complex tensor
-    #     """
-    #     tensor = fft.ktoi(tensor)
-    #     tensor = self.phasefilter(tensor)
-    #     tensor = fft.itok(tensor)
-    #     return tensor
-
     def forward(
         self,
         masked_kspace: torch.Tensor,
@@ -254,10 +220,6 @@ class Varnet(nn.Module):
         if masked_kspace.size(1) % 2 != 1 or masked_kspace.size(2) % 2 != 1:
             raise ValueError(f"Input masked_kspace must have odd number of frames and slices. But got {masked_kspace.size(1)} frames and {masked_kspace.size(2)} slices.")
 
-        # TODO: Because most of the data is dirty and noisy, a phase unwrapping module is needed.
-
-        # register_extra_output(self, "masked_kspace", masked_kspace) # Debug print
-
         csm = self.csm_model(masked_kspace, mask)
 
         if csm.isnan().any():
@@ -265,19 +227,14 @@ class Varnet(nn.Module):
 
         img_zf = self.sens_reduce(masked_kspace, csm)
         img_pred = img_zf.clone()
-        latent = img_zf.clone()
-        feat_history = [[] for _ in range(3)]
 
         for cascade_idx, cascade in enumerate(self.cascades):
             try:
-                img_pred, latent, feat = cascade(img_pred, img_zf, latent, mask, csm, feat_history)
+                img_pred = cascade(img_pred, img_zf, mask, csm)
             except torch.cuda.OutOfMemoryError as e:
                 raise torch.cuda.OutOfMemoryError(
                     f"Out of memory in cascade {cascade_idx}. Consider reducing cascade size."
                 ) from e
-            
-            for ilevel, level_history in enumerate(feat_history):
-                level_history.append(feat[ilevel])
 
         # Get reduced central slice as final output
         img_pred = img_pred[:, img_pred.size(1) // 2, img_pred.size(2) // 2, ...]
