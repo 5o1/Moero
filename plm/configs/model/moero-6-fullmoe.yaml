@@ -1,0 +1,91 @@
+model:
+  class_path: plm.models.Cmr25Module
+  init_args:
+
+    optimizer_init_kwargs:
+      lr: 0.0002
+      weight_decay: 1e-2
+
+    model:
+      class_path: models.Moero
+      init_args:
+        senseblock_kwargs:
+          use_noise: true
+        csmblock_kwargs:
+          crop: true
+
+        csm_model:
+          class_path: models.backbones.EmbedOutUnet
+          init_args:
+            in_channels: 10
+            out_channels: 10
+            pyramid_channels: [8, 12, 16, 20]
+            prompt_tokens: [8, 8, 8]
+            prompt_channels: [6, 8, 10]
+            prompt_figsize: [64, 32, 16]
+            n_enc_cab: [2, 3, 3]
+            n_dec_cab: [2, 2, 3]
+            n_skip_cab: [1, 1, 1, 3]
+            reduction: 1
+            norm: false
+            bias: false
+            idx_cascade: null
+            embed_module:
+              class_path: models.backbones.ConvEmbedModule
+              init_args:
+                in_channels: 20
+                prompt_channels: 10
+                embed_channels: 1024
+                n_conv: 3
+
+        branchnav_class_path: models.modules.nav.LearnableBranchNav
+        moe_poolsize:    [8, 8, 8, 8, 8, 8]
+        moe_n_activated: [2, 2, 2, 2, 2, 2]
+        moe_n_recurrent: [1, 1, 1, 1, 1, 1]
+        moe_embed_channels: &moedim 1024
+            
+        cascades: 
+          - class_path: models.backbones.EmbedOutUnet
+            init_args: &cascadebase
+              in_channels: 50
+              out_channels: 50
+              pyramid_channels: [24, 36, 42, 60]
+              prompt_tokens: [8, 8, 8]
+              prompt_channels: [10, 20, 30]
+              prompt_figsize: [64, 32, 16]
+              n_enc_cab: [2, 3, 3]
+              n_dec_cab: [2, 2, 3]
+              n_skip_cab: [1, 1, 1, 3]
+              reduction: 1
+              n_history: 6
+              norm: false
+              bias: false
+              history_norm: false
+              idx_cascade: 0
+              embed_module:
+                class_path: models.backbones.ConvEmbedModule
+                init_args:
+                  in_channels: 60
+                  prompt_channels: 20
+                  embed_channels: *moedim
+                  n_conv: 3
+          - class_path: models.backbones.EmbedOutUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 1
+          - class_path: models.backbones.EmbedOutUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 2
+          - class_path: models.backbones.EmbedOutUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 3
+          - class_path: models.backbones.EmbedOutUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 4
+          - class_path: models.backbones.EmbedOutUnet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 5
