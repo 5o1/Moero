@@ -1,0 +1,42 @@
+data:
+  class_path: plm.datasets.CmrDataModule
+  init_args:
+    num_workers: 8
+
+    train_config:
+      path: /home/lyy/dataset/brain-knee/train/
+      dataset_class: &datasetclasspath datasets.CmrDatasetBase
+      dataset_init_args: &traininitargs
+        n_adj_frame: 1
+        n_adj_slice: 1
+        adj_dim: slice  # Options: "frame", "slice"
+        transform: 
+          class_path: datasets.Cmr25TrainingTransform
+          init_args: {
+            acc_factors: [4],
+            n_calibs: [20],
+          }
+
+    val_configs:
+
+      - path: /home/lyy/dataset/brain-knee/val-brain/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [4, 8, 12],
+              n_calibs: [20],
+            }
+
+      - path: /home/lyy/dataset/brain-knee/val-knee/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [4, 8, 12],
+              n_calibs: [20],
+            }

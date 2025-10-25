@@ -15,7 +15,7 @@ class MultiColumnMetricsTextColumn(MetricsTextColumn):
 
 
 class MultiColumnTextDelimiter:
-    def __init__(self, ncols: int = 5):
+    def __init__(self, ncols: int = 5   ):
         self.ncols = ncols
         self.nrows_cache = None
         self.nrows_cache = None

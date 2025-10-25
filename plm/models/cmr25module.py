@@ -109,11 +109,16 @@ class Cmr25Module(MriModule):
 
             if len(ctx_loss_dict:= ctx.get_losses()) > 0:
                 for loss_name, loss_score in ctx_loss_dict.items():
-                    self.log(f"val/{loss_name}", loss_score.detach(), prog_bar=True, sync_dist=True, on_epoch=True)
+                    self.log(f"val/{loss_name}", loss_score.detach(), prog_bar=True, sync_dist=True)
             
             if len(ctx_metric_dict:= ctx.get_metrics()) > 0:
                 for metric_name, metric_score in ctx_metric_dict.items():
-                    self.log(f"val/{metric_name}", metric_score.detach(), prog_bar=True, sync_dist=True, on_epoch=True)
+                    self.log(f"val/{metric_name}", metric_score.detach(), prog_bar=True, sync_dist=True)
+
+            output_d = ctx.get_outputs()
+            if "route_path" in output_d:
+                with open("/home/lyy/moero/route.txt", "a") as f:
+                    f.write(f"{batch.fname} {batch.seqidx} " + " ".join([str(v) for v in output_d["route_path"][0].tolist()]) + "\n")
 
         return CmrValidationOutputSample(
             img_pred=output,

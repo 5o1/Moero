@@ -26,6 +26,38 @@ def center_crop(data: torch.Tensor, shape: Tuple[int, int]) -> torch.Tensor:
     y_end = math.floor(data.size(-1) / 2) + math.ceil(shape[-1] / 2)
     return data[..., x_start: x_end, y_start: y_end]
 
+
+def center_fill_(data: torch.Tensor, shape: Tuple[int, int], value: float) -> torch.Tensor:
+    """
+    Apply a center fill to the input real image or batch of real images.
+
+    Args:
+        data: The input tensor to be center filled. It should
+            have at least 2 dimensions and the filling is applied along the
+            last two dimensions.
+        shape: The shape to be filled in the center. The shape should be
+            smaller than the corresponding dimensions of data.
+        value: The value to fill in the center region.
+
+    Returns:
+        The center filled image.
+    """
+    if not (0 < shape[-2] <= data.size(-2) and 0 < shape[-1] <= data.size(-1)):
+        raise ValueError("Invalid shapes.")
+
+    x_start = math.floor(data.size(-2) / 2) + math.ceil(-shape[-2] / 2)
+    x_end = math.floor(data.size(-2) / 2) + math.ceil(shape[-2] / 2)
+
+    y_start = math.floor(data.size(-1) / 2) + math.ceil(-shape[-1] / 2)
+    y_end = math.floor(data.size(-1) / 2) + math.ceil(shape[-1] / 2)
+
+    data[..., x_start: x_end, y_start: y_end] = value
+    return data
+
+def center_fill(data: torch.Tensor, shape: Tuple[int, int], value: float) -> torch.Tensor:
+    data = data.clone()
+    return center_fill_(data, shape, value)
+
 def make_center_mask(data: torch.Tensor, shape: Tuple[int, int]) -> torch.Tensor:
     if not (0 < shape[-2] <= data.size(-2) and 0 < shape[-1] <= data.size(-1)):
         raise ValueError("Invalid shapes.")
