@@ -208,10 +208,11 @@ class Moero(nn.Module):
             self,
             csm_model: nn.Module, # id 0
             cascades: List[nn.Module], # id 1 to n_cascades
-            branchnav_class_path: str,
             moe_poolsize: List[int], # number of experts in each cascade
             moe_n_activated: List[int], # number of activated experts for each cascade
             moe_n_recurrent: List[int], # number of recurrent times for each cascade
+            branchnav_class_path: str,
+            branchnav_init_args: dict = {},
             moe_embed_channels: int = 1024, # dimension of the embedding vector
             csmblock_kwargs: dict = {},
             senseblock_kwargs: dict = {}
@@ -244,7 +245,8 @@ class Moero(nn.Module):
                 in_channels = moe_embed_channels,
                 poolsize = moe_poolsize[icascade],
                 top_k = moe_n_activated[icascade],
-                idx = icascade
+                idx = icascade,
+                **branchnav_init_args
             ) for icascade in range(len(cascades))
         ]) # (n_cascades, Branchnav)
     
