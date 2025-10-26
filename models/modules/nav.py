@@ -288,7 +288,7 @@ class Encoder(nn.Module):
                 nn.Conv2d(in_channels, pyramid_channels[0], kernel_size=1, padding=0, bias=False),
                 nn.InstanceNorm2d(pyramid_channels[0], affine=True, eps=1e-5),
                 nn.PReLU(),
-                CAB(pyramid_channels[0], pyramid_channels[0], reduction=4, dropout=0.0)
+                CAB(pyramid_channels[0], kernel_size=3, reduction=4, dropout=0.0)
             )
         self.depth = len(pyramid_channels) - 1
         self.levels = nn.ModuleList()
