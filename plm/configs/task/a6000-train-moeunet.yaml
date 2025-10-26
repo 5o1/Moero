@@ -3,9 +3,9 @@ trainer:
   accelerator: gpu
   precision: 32
   devices: 1
-  num_nodes: 1
-  max_epochs: 64
   check_val_every_n_epoch: 4
+  num_nodes: 1
+  max_epochs: 48
   log_every_n_steps: 50 # log every n steps during training
   deterministic: false
   use_distributed_sampler: false # Use false because custom VolumeSamplers have been used
@@ -15,8 +15,8 @@ trainer:
       project: moero
       mode: online
       save_dir: /home/liyuyang/exp
-      tags: [moero, c6, brainknee]
-      name: moeunet-2/4
+      tags: [moeunet, c12, brainknee]
+      name: brainknee-2/4-dis
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:

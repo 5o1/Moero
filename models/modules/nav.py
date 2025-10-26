@@ -340,6 +340,8 @@ class FeatExtractBranchNav(BranchNav):
             pyramid_channels : List[int], # depth + 1
             embedding_channels: int,
             cluster: Literal["linear", "prototype"] = "prototype",
+            prototype_act : Literal["softmax", "energy"] = "softmax",
+            use_residual_expert: bool = False,
             # ------------------------------------------------
             # Routing parameters
             top_k: int = 2, # number of experts to select
@@ -382,6 +384,8 @@ class FeatExtractBranchNav(BranchNav):
         assert aux_loss_coef >= 0.0, "aux_loss_coef must be non-negative."
         assert aux_loss_batch_coef >= 0.0, "aux_loss_batch_coef must be non-negative."
         assert prob_sparse_loss_coef >= 0.0, "prob_sparse_loss_coef must be non-negative."
+        if use_residual_expert:
+            assert poolsize > 1 and top_k > 1, "Residual expert requires poolsize > 1 and top_k > 1."
 
         self.depth = len(pyramid_channels) - 1
 
@@ -399,8 +403,16 @@ class FeatExtractBranchNav(BranchNav):
         self.detach = detach
         self.batch_cache_size = batch_cache_size
         self.cluster = cluster
+        self.prototype_act = prototype_act
+        self.use_residual_expert = use_residual_expert
 
         if self.poolsize > 1:
+            if self.use_residual_expert:
+                self.poolsize_logits = poolsize - 1
+                self.top_k_logits = top_k - 1
+            else:
+                self.poolsize_logits = poolsize
+                self.top_k_logits = top_k
             # ---------------- Classifier ----------------
             self.extractors = Encoder(in_channels, pyramid_channels, embedding_channels)
             self.head = nn.Sequential(
@@ -410,19 +422,19 @@ class FeatExtractBranchNav(BranchNav):
                 nn.Linear(256, 64, bias=False),
                 nn.LayerNorm(64),
                 nn.PReLU(),
-                nn.Linear(64, poolsize, bias=True),
+                nn.Linear(64, self.poolsize_logits),
             )
             if self.cluster == "prototype":
-                proto = torch.empty((poolsize, poolsize))
+                proto = torch.empty((self.poolsize_logits, self.poolsize_logits))
                 proto = torch.nn.init.orthogonal_(proto)
                 self.register_buffer("prototype", F.normalize(proto, p=2, dim=0)) # Note: prototype has been transposed for matmul
 
             self.register_buffer("global_step", torch.zeros((), dtype=torch.long))
             # ---------------- Frequency Counters ----------------
-            self.register_buffer("weights_ema", torch.zeros((poolsize,), dtype=torch.float32))
-            self.register_buffer("route_ema", torch.zeros((poolsize,), dtype=torch.float32))
-            self.register_buffer("weights_ema_val", torch.zeros((poolsize,), dtype=torch.float32))
-            self.register_buffer("route_ema_val", torch.zeros((poolsize,), dtype=torch.float32))
+            self.register_buffer("weights_ema", torch.zeros((self.poolsize_logits,), dtype=torch.float32))
+            self.register_buffer("route_ema", torch.zeros((self.poolsize_logits,), dtype=torch.float32))
+            self.register_buffer("weights_ema_val", torch.zeros((self.poolsize_logits,), dtype=torch.float32))
+            self.register_buffer("route_ema_val", torch.zeros((self.poolsize_logits,), dtype=torch.float32))
             # ---------------- Noise Temperature Schedule ----------------
             self.temp_init = float(temp_init)
             self.temp_min = float(temp_min)
@@ -531,9 +543,9 @@ class FeatExtractBranchNav(BranchNav):
                 aux_loss_coef = self.aux_loss_coef_min + 0.5 * (self.aux_loss_coef - self.aux_loss_coef_min) * (1.0 + cosw)
                 aux_loss_batch_coef = self.aux_loss_batch_coef_min + 0.5 * (self.aux_loss_batch_coef - self.aux_loss_batch_coef_min) * (1.0 + cosw)
             else:  # "exp"
-                ratio = s / total
-                aux_loss_coef = max(self.aux_loss_coef_min, self.aux_loss_coef * (self.aux_loss_gamma ** ratio))
-                aux_loss_batch_coef = max(self.aux_loss_batch_coef_min, self.aux_loss_batch_coef * (self.aux_loss_gamma ** ratio))
+                t = max(0.0, s)  # elapsed steps since step0
+                aux_loss_coef = max(self.aux_loss_coef_min, self.aux_loss_coef * (self.aux_loss_gamma ** t))
+                aux_loss_batch_coef = max(self.aux_loss_batch_coef_min, self.aux_loss_batch_coef * (self.aux_loss_gamma ** t))
         return torch.tensor(aux_loss_coef, device=device, dtype=torch.float32), torch.tensor(aux_loss_batch_coef, device=device, dtype=torch.float32)
 
     def cal_balancing_prior(self) -> Tensor:
@@ -554,7 +566,7 @@ class FeatExtractBranchNav(BranchNav):
         route_count = route_count.float()
         route_freq = route_count / (route_count.sum() + self.eps)
         entropy = -(route_freq * (route_freq + self.eps).log()).sum()
-        entropy_max = torch.log(torch.tensor(float(self.poolsize), device=route_count.device))
+        entropy_max = torch.log(torch.tensor(float(route_count.size(0)), device=route_count.device))
         entropy_norm = entropy / (entropy_max + self.eps)
         focus = 1.0 - entropy_norm
         return focus
@@ -598,7 +610,7 @@ class FeatExtractBranchNav(BranchNav):
 
         # ---------------- compute logits ----------------
         if self.global_step.item() < self.n_skip:
-            logits = torch.zeros((x.size(0), self.poolsize), device=x.device, dtype=x.dtype)
+            logits = torch.ones((x.size(0), self.poolsize_logits), device=x.device, dtype=x.dtype) / self.poolsize_logits
         else:
             x = self.extractors(x)
             x: torch.Tensor = self.head(x)        # [B, embedding_channels]
@@ -641,7 +653,10 @@ class FeatExtractBranchNav(BranchNav):
             logits_topk = logits
 
         # Compute softmax over all experts for weights
-        prob_all = torch.softmax((logits).float(), dim=-1).to(logits.dtype)  # [B, pool_size]
+        if self.cluster == "prototype" and self.prototype_act == "energy":
+            prob_all = logits ** 2
+        else:
+            prob_all = torch.softmax((logits).float(), dim=-1).to(logits.dtype)  # [B, pool_size]
 
         # auxiliary loss for global balance
         if self.aux_loss_coef > 0.0 and self.training and self.global_step >= self.n_skip:
@@ -652,15 +667,20 @@ class FeatExtractBranchNav(BranchNav):
 
         # probability sparsity loss for sparsing the weights
         if self.prob_sparse_loss_coef > 0.0 and self.training and self.global_step >= self.n_skip:
-            log_prob = torch.log_softmax(logits.float(), dim=-1)
-            p = log_prob.exp()
-            prob_sparse_loss = - (p * log_prob).sum(dim=-1).mean() * self.prob_sparse_loss_coef
+            if self.cluster == "prototype" and self.prototype_act == "energy":
+                scores = (logits ** 2).float()
+                p = scores / (scores.sum(dim=-1, keepdim=True) + self.eps)
+                logp = (p + self.eps).log()
+                prob_sparse_loss = - (p * logp).sum(dim=-1).mean() * self.prob_sparse_loss_coef
+            else:
+                log_prob = torch.log_softmax(logits.float(), dim=-1)
+                p = log_prob.exp()
+                prob_sparse_loss = - (p * log_prob).sum(dim=-1).mean() * self.prob_sparse_loss_coef
             register_extra_loss(self, f"prob_sparse_loss", prob_sparse_loss, op="sum")
-            # register_extra_metric(self, f"prob_max-min{self.idx}", (prob_all.max(dim=-1).values - prob_all.min(dim=-1).values).mean())
 
         # Top-k indices/mask for hard dispatch
         topk_scores = logits_topk  # reduce logit contrast when tau is large
-        topk = torch.topk(topk_scores, k=self.top_k, dim=-1, largest=True, sorted=False)
+        topk = torch.topk(topk_scores, k=self.top_k_logits, dim=-1, largest=True, sorted=False)
         topk_mask = torch.zeros_like(logits).scatter_(dim=-1, index=topk.indices, value=1.0)  # [B, pool_size]
 
         # auxiliary loss for batch balance
@@ -676,6 +696,12 @@ class FeatExtractBranchNav(BranchNav):
         # Sparse weights = soft probabilities masked by top-k
         prob_weights = prob_all * topk_mask  # [B, pool_size]
 
+        if self.use_residual_expert:
+            # Residual energy for the unselected experts
+            sum_selected = prob_weights.sum(dim=-1, keepdim=True)  # [B, 1]
+            prob_weights = torch.cat([prob_weights, 1.0 - sum_selected], dim=-1)  # [B, pool_size_logits + 1]
+            topk_mask = torch.cat([topk_mask, torch.ones((topk_mask.size(0), 1), device=topk_mask.device, dtype=topk_mask.dtype)], dim=-1)
+
         # Normalize sparse weights to sum to 1 over top-k
         denom = prob_weights.sum(dim=-1, keepdim=True).clamp_min(self.eps).detach()  # stop-grad
         prob_weights_norm = prob_weights / denom  # [B, pool_size]
@@ -687,8 +713,8 @@ class FeatExtractBranchNav(BranchNav):
             dist_fn.all_reduce(batch_select)
             dist_fn.all_reduce(weights_sum)
             if self.training:
-                self.route_ema.mul_(self.ema_decay).add_((1 - self.ema_decay) * batch_select) # EMA update
-                self.weights_ema.mul_(self.ema_decay).add_((1 - self.ema_decay) * weights_sum) # EMA update
+                self.route_ema.mul_(self.ema_decay).add_((1 - self.ema_decay) * batch_select[:self.poolsize_logits]) # EMA update
+                self.weights_ema.mul_(self.ema_decay).add_((1 - self.ema_decay) * weights_sum[:self.poolsize_logits]) # EMA update
                 # Logging
                 register_extra_metric(self, f"shannon_w{self.idx}", self.cal_shannon_redundancy(self.weights_ema), op="mean")
                 register_extra_metric(self, f"cv_c{self.idx}", self.cal_variation_coefficient(self.route_ema), op="mean")
@@ -699,8 +725,8 @@ class FeatExtractBranchNav(BranchNav):
                 if step is None:
                     self.global_step.add_(1)
             else:
-                self.route_ema_val.mul_(self.ema_decay).add_((1 - self.ema_decay) * batch_select) # EMA update
-                self.weights_ema_val.mul_(self.ema_decay).add_((1 - self.ema_decay) * weights_sum) # EMA update
+                self.route_ema_val.mul_(self.ema_decay).add_((1 - self.ema_decay) * batch_select[:self.poolsize_logits]) # EMA update
+                self.weights_ema_val.mul_(self.ema_decay).add_((1 - self.ema_decay) * weights_sum[:self.poolsize_logits]) # EMA update
                 # Logging
                 register_extra_metric(self, f"shannon_w_val{self.idx}", self.cal_shannon_redundancy(self.weights_ema_val), op="mean")
                 register_extra_metric(self, f"cv_c_val{self.idx}", self.cal_variation_coefficient(self.route_ema_val), op="mean")
@@ -709,6 +735,10 @@ class FeatExtractBranchNav(BranchNav):
         prob_weights_norm = prob_weights_norm[-raw_batch_size:, :]
         topk_mask = topk_mask[-raw_batch_size:, :]
         indices = topk.indices[-raw_batch_size:, :]
+        if self.use_residual_expert:
+            # add last index for residual expert
+            residual_idx = torch.full((raw_batch_size, 1), self.poolsize - 1, device=indices.device, dtype=indices.dtype)
+            indices = torch.cat([indices, residual_idx], dim=-1)
 
         return prob_weights_norm, topk_mask, indices
     

@@ -45,6 +45,8 @@ model:
                 pyramid_channels: [32, 64, 128, 256]
                 embedding_channels: 1024
                 cluster: "prototype"
+                prototype_act : energy
+                use_residual_expert: false
                 batch_cache_size: 20
                 balance_prior_lambda: 0.0
                 z_loss_coef: 1e-3
