@@ -4,7 +4,8 @@ trainer:
   precision: 32
   devices: 1
   num_nodes: 1
-  max_epochs: 8
+  max_epochs: 64
+  check_val_every_n_epoch: 4
   log_every_n_steps: 50 # log every n steps during training
   deterministic: false
   use_distributed_sampler: false # Use false because custom VolumeSamplers have been used
@@ -14,8 +15,8 @@ trainer:
       project: moero
       mode: online
       save_dir: /home/liyuyang/exp
-      tags: [cmr25lab, moero, c6, fastmri-mini, singlegpu, samechannels]
-      name: moero-6-samech
+      tags: [moero, c6, brainknee]
+      name: moeunet-2/4
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -28,11 +29,11 @@ trainer:
       init_args:
         precision: "high"  # Set to "high" for high precision matmul operations
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
-    - class_path: plm.callbacks.FlopsProfiler
-      init_args:
-        inputs_mapper:
-          class_path: plm.callbacks.flops.CmrInputsMapper
-          init_args:
-            keys: ["masked_kspace", "mask"]
+    # - class_path: plm.callbacks.FlopsProfiler
+    #   init_args:
+    #     inputs_mapper:
+    #       class_path: plm.callbacks.flops.CmrInputsMapper
+    #       init_args:
+    #         keys: ["masked_kspace", "mask"]
 
 ckpt_path: null
