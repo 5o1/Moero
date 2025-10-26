@@ -13,12 +13,16 @@ data:
         transform: 
           class_path: datasets.Cmr25TrainingTransform
           init_args: {
-            acc_factors: [4],
+            acc_factors: [4, 8],
             n_calibs: [20],
+            mask_weights: {
+                Uniform: 1,
+                ktGaussian: 0,
+                ktRadial: 0,
+            }
           }
 
     val_configs:
-
       - path: /home/lyy/dataset/brain-knee/val-brain/
         dataset_class: *datasetclasspath
         dataset_init_args:
@@ -26,17 +30,58 @@ data:
           transform: 
             class_path: datasets.Cmr25TrainingTransform
             init_args: {
-              acc_factors: [4, 8, 12],
+              acc_factors: [4],
               n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 0,
+                  ktRadial: 0,
+              }
             }
+      # - path: /home/lyy/dataset/brain-knee/val-brain/
+      #   dataset_class: *datasetclasspath
+      #   dataset_init_args:
+      #     <<: *traininitargs
+      #     transform: 
+      #       class_path: datasets.Cmr25TrainingTransform
+      #       init_args: {
+      #         acc_factors: [8],
+      #         n_calibs: [20],
+      #         mask_weights: {
+      #             Uniform: 1,
+      #             ktGaussian: 0,
+      #             ktRadial: 0,
+      #         }
+      #       }
 
-      - path: /home/lyy/dataset/brain-knee/val-knee/
-        dataset_class: *datasetclasspath
-        dataset_init_args:
-          <<: *traininitargs
-          transform: 
-            class_path: datasets.Cmr25TrainingTransform
-            init_args: {
-              acc_factors: [4, 8, 12],
-              n_calibs: [20],
-            }
+      # - path: /home/lyy/dataset/brain-knee/val-knee/
+      #   dataset_class: *datasetclasspath
+      #   dataset_init_args:
+      #     <<: *traininitargs
+      #     transform: 
+      #       class_path: datasets.Cmr25TrainingTransform
+      #       init_args: {
+      #         acc_factors: [4],
+      #         n_calibs: [20],
+      #         mask_weights: {
+      #             Uniform: 1,
+      #             ktGaussian: 0,
+      #             ktRadial: 0,
+      #         }
+      #       }
+
+      # - path: /home/lyy/dataset/brain-knee/val-knee/
+      #   dataset_class: *datasetclasspath
+      #   dataset_init_args:
+      #     <<: *traininitargs
+      #     transform: 
+      #       class_path: datasets.Cmr25TrainingTransform
+      #       init_args: {
+      #         acc_factors: [4],
+      #         n_calibs: [20],
+      #         mask_weights: {
+      #             Uniform: 1,
+      #             ktGaussian: 0,
+      #             ktRadial: 0,
+      #         }
+      #       }

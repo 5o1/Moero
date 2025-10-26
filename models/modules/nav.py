@@ -325,45 +325,68 @@ class FeatExtractBranchNav(BranchNav):
     route_ema: torch.Tensor
     weights_ema: torch.Tensor
     global_step: torch.Tensor
-    current_temp: torch.Tensor
+    current_temperature: torch.Tensor
+    current_aux_loss_coef: torch.Tensor
+    current_aux_loss_b_coef: torch.Tensor
     route_ema_val: torch.Tensor
     weights_ema_val: torch.Tensor
     prototype: torch.Tensor
 
     def __init__(
             self,
+            # ------------------------------------------------
+            # Classifier parameters
             in_channels: int,
             pyramid_channels : List[int], # depth + 1
             embedding_channels: int,
-            top_k: int = 2,
-            poolsize: int = 8,
-            eps = 1e-5,
-            n_skip: int = 0,
-            ema_decay: float = 0.99,
-            balance_lambda: float = 1.0,
-            z_loss_coef: float = 1e-3,
-            aux_loss_coef: float = 1e-2,
-            aux_loss_batch_coef: float = 1e-2,
-            prob_sparse_loss_coef: float = 1e-2,
-            balance: Literal["auxloss", "logprior"] = "logprior",
             cluster: Literal["linear", "prototype"] = "prototype",
-            detach: bool = True,
-            idx: int = 0,
-            batch_cache_size: int = 10,
+            # ------------------------------------------------
+            # Routing parameters
+            top_k: int = 2, # number of experts to select
+            poolsize: int = 8, # number of experts
+            ema_decay: float = 0.99, # for counters EMA
+            #------------------------------------------------
+            # balancing parameters
+            balance_prior_lambda: float = 0.0,
+            z_loss_coef: float = 1e-3,
+            aux_loss_coef: float = 1e-1,
+            aux_loss_batch_coef: float = 1e-1,
+            prob_sparse_loss_coef: float = 1e-3,
+            # ------------------------------------------------
+            # Auxiliary losses annealing parameters
+            aux_loss_coef_min: float = 1e-3,      #    minimum aux loss coef
+            aux_loss_batch_coef_min: float = 1e-3, #    minimum aux loss batch coef
+            aux_loss_decay_type: Literal["linear", "cosine", "exp"] = "linear",
+            aux_loss_step0: int = 20000,        #    starting step for annealing
+            aux_loss_stepn: int = 40000,        #    ending step for annealing
+            aux_loss_gamma: float = 0.9995,        #    for exp: coef_t = max(coef_min, coef_init * gamma^t)
+            # ------------------------------------------------
             # Temperature annealing parameters
-            temp_init: float = 1.0,        # large temperature for near-uniform at early stage
-            temp_min: float = 0.0,         # lower bound
-            temp_decay_type: Literal["linear", "cosine", "exp"] = "cosine",
-            temp_decay_steps: int = 20000, # for linear/cosine
-            temp_gamma: float = 0.9995,    # for exp: tau_t = max(temp_min, temp_init * gamma^t)
+            temp_init: float = 1.0,        #    initial temperature
+            temp_min: float = 0.0,         #    minimum temperature
+            temp_decay_type: Literal["linear", "cosine", "exp"] = "linear",
+            temp_decay_steps: int = 10000, #    number of steps for decay
+            temp_gamma: float = 0.9995,    #    for exp: tau_t = max(temp_min, temp_init * gamma^t)
+            # ------------------------------------------------
+            eps = 1e-5,
+            idx: int = 0, # identifier for multiple nav modules
+            detach: bool = True, # whether to detach input features
+            n_skip: int = 0, # number of initial steps, all of the classifiers will not be used before n_skip
+            batch_cache_size: int = 20, # number of previous batches to cache for dummy batch creation
         ):
         super().__init__()
         assert poolsize >= 1, "pool_size must be >= 1"
         assert 1 <= top_k <= poolsize, "top_k must be in [1, pool_size]"
+        assert not (cluster == "prototype" and balance_prior_lambda != 0.0), "Cannot use balancing prior with prototype clustering."
+        assert z_loss_coef >= 0.0, "z_loss_coef must be non-negative."
+        assert aux_loss_coef >= 0.0, "aux_loss_coef must be non-negative."
+        assert aux_loss_batch_coef >= 0.0, "aux_loss_batch_coef must be non-negative."
+        assert prob_sparse_loss_coef >= 0.0, "prob_sparse_loss_coef must be non-negative."
+
         self.depth = len(pyramid_channels) - 1
 
         self.eps = eps
-        self.balance_lambda = balance_lambda
+        self.balance_prior_lambda = balance_prior_lambda
         self.ema_decay = ema_decay
         self.top_k = top_k
         self.poolsize = poolsize
@@ -373,65 +396,76 @@ class FeatExtractBranchNav(BranchNav):
         self.prob_sparse_loss_coef = prob_sparse_loss_coef
         self.n_skip = n_skip
         self.idx = idx
-        self.balance = balance
         self.detach = detach
         self.batch_cache_size = batch_cache_size
         self.cluster = cluster
 
-        self.extractors = Encoder(in_channels, pyramid_channels, embedding_channels)
-        self.head = nn.Sequential(
-            nn.Linear(embedding_channels, 256, bias=False),
-            nn.LayerNorm(256),
-            nn.PReLU(),
-            nn.Linear(256, 64, bias=False),
-            nn.LayerNorm(64),
-            nn.PReLU(),
-            nn.Linear(64, poolsize, bias=True),
-        )
-        # self.wnoise = nn.Linear(embedding_channels, poolsize)
-        self.register_buffer("weights_ema", torch.zeros((poolsize,), dtype=torch.float32))
-        self.register_buffer("route_ema", torch.zeros((poolsize,), dtype=torch.float32))
-        self.register_buffer("weights_ema_val", torch.zeros((poolsize,), dtype=torch.float32))
-        self.register_buffer("route_ema_val", torch.zeros((poolsize,), dtype=torch.float32))
-        # self.weights_ema_val = torch.zeros((poolsize,), dtype=torch.float32)
-        # self.route_ema_val = torch.zeros((poolsize,), dtype=torch.float32)
+        if self.poolsize > 1:
+            # ---------------- Classifier ----------------
+            self.extractors = Encoder(in_channels, pyramid_channels, embedding_channels)
+            self.head = nn.Sequential(
+                nn.Linear(embedding_channels, 256, bias=False),
+                nn.LayerNorm(256),
+                nn.PReLU(),
+                nn.Linear(256, 64, bias=False),
+                nn.LayerNorm(64),
+                nn.PReLU(),
+                nn.Linear(64, poolsize, bias=True),
+            )
+            if self.cluster == "prototype":
+                proto = torch.empty((poolsize, poolsize))
+                proto = torch.nn.init.orthogonal_(proto)
+                self.register_buffer("prototype", F.normalize(proto, p=2, dim=0)) # Note: prototype has been transposed for matmul
 
-         # ---------------- NEW: store temp schedule params ----------------
-        self.temp_init = float(temp_init)
-        self.temp_min = float(temp_min)
-        self.temp_decay_type = temp_decay_type
-        self.temp_decay_steps = int(temp_decay_steps)
-        self.temp_gamma = float(temp_gamma)
-        # Buffers for step and current temperature
-        self.register_buffer("global_step", torch.zeros((), dtype=torch.long))
-        self.register_buffer("current_temp", torch.tensor(self.temp_init, dtype=torch.float32))
+            self.register_buffer("global_step", torch.zeros((), dtype=torch.long))
+            # ---------------- Frequency Counters ----------------
+            self.register_buffer("weights_ema", torch.zeros((poolsize,), dtype=torch.float32))
+            self.register_buffer("route_ema", torch.zeros((poolsize,), dtype=torch.float32))
+            self.register_buffer("weights_ema_val", torch.zeros((poolsize,), dtype=torch.float32))
+            self.register_buffer("route_ema_val", torch.zeros((poolsize,), dtype=torch.float32))
+            # ---------------- Noise Temperature Schedule ----------------
+            self.temp_init = float(temp_init)
+            self.temp_min = float(temp_min)
+            self.temp_decay_type = temp_decay_type
+            self.temp_decay_steps = int(temp_decay_steps)
+            self.temp_gamma = float(temp_gamma)
+            self.register_buffer("current_temperature", torch.tensor(self.temp_init, dtype=torch.float32))
+            # ---------------- Auxiliary Losses Schedule ----------------
+            self.aux_loss_coef_min = float(aux_loss_coef_min)
+            self.aux_loss_batch_coef_min = float(aux_loss_batch_coef_min)
+            self.aux_loss_decay_type = aux_loss_decay_type
+            self.aux_loss_step0 = int(aux_loss_step0)
+            self.aux_loss_stepn = int(aux_loss_stepn)
+            self.aux_loss_gamma = float(aux_loss_gamma)
+            self.register_buffer("current_aux_loss_coef", torch.tensor(self.aux_loss_coef, dtype=torch.float32))
+            self.register_buffer("current_aux_loss_b_coef", torch.tensor(self.aux_loss_batch_coef, dtype=torch.float32))
+            # ---------------- Batch cache for dummy batch ----------------
+            self.batch_cache = []
 
-        # Prototype vectors for prototype-based clustering
-        if self.cluster == "prototype":
-            proto = torch.empty((poolsize, poolsize))
-            proto = torch.nn.init.orthogonal_(proto)
-            self.register_buffer("prototype", F.normalize(proto, p=2, dim=0))
+        self.apply(self._init_weights)
 
-        self.batch_cache = []
 
-        # Init
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Linear):
-                nn.init.trunc_normal_(m.weight, std=0.02)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, (nn.InstanceNorm2d, nn.BatchNorm2d)):
-                if m.weight is not None:
-                    nn.init.ones_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+    def _init_weights(self, m: nn.Module):
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, (nn.InstanceNorm2d, nn.BatchNorm2d)):
+            if m.weight is not None:
+                nn.init.ones_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        
     # ---------------- temperature scheduler ----------------
     @torch.no_grad()
-    def _compute_temperature(self, step: int | None = None) -> torch.Tensor:
+    def cal_temperature(self, step: int | None = None) -> torch.Tensor:
+        """
+        Calculate temperature tau at given step according to the annealing schedule.
+        Args:
+            step (int, optional): Current training step. If None, use self.global_step.
+        Returns:
+            torch.Tensor: Scalar tensor representing the temperature tau.
+        """
         # Returns a scalar tensor tau on the same device as route_ema
         device = self.route_ema.device
         if step is None:
@@ -461,10 +495,48 @@ class FeatExtractBranchNav(BranchNav):
         else:  # "exp"
             # tau = max(temp_min, temp_init * gamma^s)
             tau = max(self.temp_min, self.temp_init * (self.temp_gamma ** s))
-
         return torch.tensor(tau, device=device, dtype=torch.float32)
 
-    def _balancing_prior(self) -> Tensor:
+    @torch.no_grad()
+    def cal_aux_loss_coef(self, step: int | None = None) -> torch.Tensor:
+        """
+        Calculate auxiliary loss coefficient at given step according to the annealing schedule.
+        Args:
+            step (int, optional): Current training step. If None, use self.global_step.
+        Returns:
+            torch.Tensor: Scalar tensor representing the auxiliary loss coefficient.
+            torch.Tensor: Scalar tensor representing the auxiliary loss batch coefficient.
+        """
+        device = self.route_ema.device
+        if step is None:
+            step = int(self.global_step.item())
+        s = float(step)
+
+        # Main aux loss coef
+        if step < self.aux_loss_step0:
+            aux_loss_coef = self.aux_loss_coef
+            aux_loss_batch_coef = self.aux_loss_batch_coef
+        elif step >= self.aux_loss_stepn:
+            aux_loss_coef = self.aux_loss_coef_min
+            aux_loss_batch_coef = self.aux_loss_batch_coef_min
+        else:
+            s = float(step - self.aux_loss_step0)
+            total = float(self.aux_loss_stepn - self.aux_loss_step0)
+            if self.aux_loss_decay_type == "linear":
+                frac = 1.0 - s / total
+                aux_loss_coef = self.aux_loss_coef_min + (self.aux_loss_coef - self.aux_loss_coef_min) * frac
+                aux_loss_batch_coef = self.aux_loss_batch_coef_min + (self.aux_loss_batch_coef - self.aux_loss_batch_coef_min) * frac
+            elif self.aux_loss_decay_type == "cosine":
+                cosw = math.cos(math.pi * (s / total))
+                aux_loss_coef = self.aux_loss_coef_min + 0.5 * (self.aux_loss_coef - self.aux_loss_coef_min) * (1.0 + cosw)
+                aux_loss_batch_coef = self.aux_loss_batch_coef_min + 0.5 * (self.aux_loss_batch_coef - self.aux_loss_batch_coef_min) * (1.0 + cosw)
+            else:  # "exp"
+                ratio = s / total
+                aux_loss_coef = max(self.aux_loss_coef_min, self.aux_loss_coef * (self.aux_loss_gamma ** ratio))
+                aux_loss_batch_coef = max(self.aux_loss_batch_coef_min, self.aux_loss_batch_coef * (self.aux_loss_gamma ** ratio))
+        return torch.tensor(aux_loss_coef, device=device, dtype=torch.float32), torch.tensor(aux_loss_batch_coef, device=device, dtype=torch.float32)
+
+    def cal_balancing_prior(self) -> Tensor:
         """
         Build additive log-prior for logits from EMA usage:
         log_prior_i = -log(usage_i + eps), scaled by balance_lambda.
@@ -473,12 +545,11 @@ class FeatExtractBranchNav(BranchNav):
         usage = self.route_ema.clamp_min(self.eps)
         usage = usage / usage.sum().clamp_min(self.eps)  # make it comparable across batch sizes
         log_prior = -torch.log(usage)                    # higher for rarely used experts
-        return self.balance_lambda * log_prior           # [pool_size]
+        return self.balance_prior_lambda * log_prior           # [pool_size]
 
-
-    def focus_metric(self, route_count: Tensor) -> Tensor:
+    def cal_shannon_redundancy(self, route_count: Tensor) -> Tensor:
         """
-        Calculate focus metric from route counts. Entropy-based, normalized to [0, 1].
+        Calculate Shannon redundancy from route counts.
         """
         route_count = route_count.float()
         route_freq = route_count / (route_count.sum() + self.eps)
@@ -488,16 +559,33 @@ class FeatExtractBranchNav(BranchNav):
         focus = 1.0 - entropy_norm
         return focus
 
+    def cal_variation_coefficient(self, route_count: Tensor) -> Tensor:
+        """
+        Calculate coefficient of variation (std/mean) from route counts.
+        """
+        route_count = route_count.float()
+        mean = route_count.mean()
+        if mean == 0:
+            return torch.tensor(0.0, device=route_count.device)
+        std = route_count.std()
+        return std / mean
+
     def forward(
         self,
         x: torch.Tensor,
         step: int | None = None,
     ) -> Tuple[Tensor, Tensor, LongTensor]:
-        # CNN -> GAP -> logits
-        if self.detach:
+        if self.poolsize == 1: # Return if no experts were set up
+            batch_size = x.size(0)
+            prob_weights = torch.ones((batch_size, 1), device=x.device, dtype=x.dtype)
+            topk_mask = torch.ones((batch_size, 1), device=x.device, dtype=x.dtype)
+            indices = torch.zeros((batch_size, 1), device=x.device, dtype=torch.long)
+            return prob_weights, topk_mask, indices
+
+        if self.detach: # Detach input features to stop gradient flow if specified
             x = x.detach()
 
-        # create dummy batch
+        # Create dummy batch by combining cached batches during training
         raw_batch_size = x.size(0)
         if self.training:
             dummy_batch = torch.cat(center_crop_to_smallest(*tuple(self.batch_cache + [x])), dim=0) if len(self.batch_cache) > 0 else x
@@ -508,6 +596,7 @@ class FeatExtractBranchNav(BranchNav):
                     self.batch_cache.pop(0)
             x = dummy_batch
 
+        # ---------------- compute logits ----------------
         if self.global_step.item() < self.n_skip:
             logits = torch.zeros((x.size(0), self.poolsize), device=x.device, dtype=x.dtype)
         else:
@@ -515,9 +604,10 @@ class FeatExtractBranchNav(BranchNav):
             x: torch.Tensor = self.head(x)        # [B, embedding_channels]
 
             # z-loss
-            if self.training and self.poolsize > 1 and self.z_loss_coef > 0.0:
+            if self.training and self.z_loss_coef > 0.0:
                 z_loss = torch.logsumexp(x.float(), dim=-1) ** 2 * self.z_loss_coef
                 register_extra_loss(self, f"route_zloss{self.idx}", z_loss.mean())
+
             if self.cluster == "linear":
                 logits = x
             else:
@@ -525,62 +615,63 @@ class FeatExtractBranchNav(BranchNav):
                 x_norm = F.normalize(x, p=2, dim=-1)  # [B, embedding_channels]
                 logits = torch.matmul(x_norm, self.prototype)  # [B, pool_size]
 
-         # ---------------- fetch temperature tau ----------------
+         # ---------------- update schedules ----------------
         if self.training:
-            tau = self._compute_temperature(step)  # scalar tensor
+            tau = self.cal_temperature(step)  # scalar tensor
+            aux_loss_coef, aux_loss_b_coef = self.cal_aux_loss_coef(step)
             # keep a copy for logging/inspection
             with torch.no_grad():
-                self.current_temp.copy_(tau)
-                if step is None:
-                    self.global_step.add_(1)
+                self.current_temperature.copy_(tau)
+                self.current_aux_loss_coef.copy_(aux_loss_coef)
+                self.current_aux_loss_b_coef.copy_(aux_loss_b_coef)
         else:
             # In eval, you may choose tau=1.0 to use the learned sharp distribution
             tau = torch.tensor(1.0, device=logits.device, dtype=torch.float32)
 
         # Add EMA-based balancing prior in logits space
-        if self.balance == "logprior":
-            prior = self._balancing_prior().unsqueeze(0).to(logits.device, logits.dtype)
+        if self.balance_prior_lambda != 0.0 and self.cluster != "prototype":
+            prior = self.cal_balancing_prior().unsqueeze(0).to(logits.device, logits.dtype)
             logits = logits + prior
 
         # ---------------- temperature-aware noise & top-k scores ----------------
         if self.training:
-            # Increase exploration early by scaling noise with tau
+            # Only perform noise injection during training and during caculation of top-k scores
             logits_topk = logits + torch.randn_like(logits) * tau
         else:
             logits_topk = logits
 
-        # Compute softmax over all experts
+        # Compute softmax over all experts for weights
         prob_all = torch.softmax((logits).float(), dim=-1).to(logits.dtype)  # [B, pool_size]
 
         # auxiliary loss for global balance
-        if self.balance == "auxloss" and self.training and self.poolsize > 1 and self.aux_loss_coef > 0.0 and self.global_step > self.n_skip:
+        if self.aux_loss_coef > 0.0 and self.training and self.global_step >= self.n_skip:
             route_count = self.route_ema.float()
             route_freq = route_count / (route_count.sum() + self.eps)
-            aux_loss = (route_freq * prob_all).sum(dim=-1).mean()
-            aux_loss = aux_loss * self.aux_loss_coef
-            register_extra_loss(self, f"global_auxloss{self.idx}", aux_loss)
+            aux_loss = (route_freq * prob_all).sum(dim=-1).mean() * aux_loss_coef
+            register_extra_loss(self, f"global_auxloss", aux_loss, op="sum")
 
-        if self.poolsize > 1 and self.prob_sparse_loss_coef > 0.0 and self.global_step > self.n_skip:
+        # probability sparsity loss for sparsing the weights
+        if self.prob_sparse_loss_coef > 0.0 and self.training and self.global_step >= self.n_skip:
             log_prob = torch.log_softmax(logits.float(), dim=-1)
             p = log_prob.exp()
             prob_sparse_loss = - (p * log_prob).sum(dim=-1).mean() * self.prob_sparse_loss_coef
-            register_extra_loss(self, f"prob_sparse_loss{self.idx}", prob_sparse_loss)
-            register_extra_metric(self, f"prob_max-min{self.idx}", (prob_all.max(dim=-1).values - prob_all.min(dim=-1).values).mean())
+            register_extra_loss(self, f"prob_sparse_loss", prob_sparse_loss, op="sum")
+            # register_extra_metric(self, f"prob_max-min{self.idx}", (prob_all.max(dim=-1).values - prob_all.min(dim=-1).values).mean())
 
+        # Top-k indices/mask for hard dispatch
         topk_scores = logits_topk  # reduce logit contrast when tau is large
         topk = torch.topk(topk_scores, k=self.top_k, dim=-1, largest=True, sorted=False)
         topk_mask = torch.zeros_like(logits).scatter_(dim=-1, index=topk.indices, value=1.0)  # [B, pool_size]
 
         # auxiliary loss for batch balance
-        if self.training and self.poolsize > 1 and self.aux_loss_batch_coef > 0.0 and self.global_step > self.n_skip:
+        if self.aux_loss_batch_coef > 0.0 and self.training and self.global_step >= self.n_skip:
             with torch.no_grad():
                 batch_select = topk_mask.sum(dim=0) # [pool_size], how many times each expert chosen
                 dist_fn.all_reduce(batch_select)
                 batch_size_eff = float(x.size(0))
                 batch_freq = batch_select.float() / (batch_size_eff + self.eps)
-            aux_loss_batch = (batch_freq * prob_all).sum(dim=-1).mean()
-            aux_loss_batch = aux_loss_batch * self.aux_loss_batch_coef
-            register_extra_loss(self, f"batch_auxloss{self.idx}", aux_loss_batch)
+            aux_loss_batch = (batch_freq * prob_all).sum(dim=-1).mean() * aux_loss_b_coef
+            register_extra_loss(self, f"batch_auxloss", aux_loss_batch, op="sum")
 
         # Sparse weights = soft probabilities masked by top-k
         prob_weights = prob_all * topk_mask  # [B, pool_size]
@@ -589,39 +680,32 @@ class FeatExtractBranchNav(BranchNav):
         denom = prob_weights.sum(dim=-1, keepdim=True).clamp_min(self.eps).detach()  # stop-grad
         prob_weights_norm = prob_weights / denom  # [B, pool_size]
 
-        # Update frequency stats
-        if self.training and self.poolsize > 1:
-            with torch.no_grad():
-                batch_select = topk_mask.sum(dim=0) # [pool_size], how many times each expert chosen
-                weights_sum = prob_weights_norm.sum(dim=0) # [pool_size], total weights assigned to each expert
-                dist_fn.all_reduce(batch_select)
-                dist_fn.all_reduce(weights_sum)
+        # Update stats
+        with torch.no_grad():
+            batch_select = topk_mask.sum(dim=0) # [pool_size], how many times each expert chosen
+            weights_sum = prob_weights_norm.sum(dim=0) # [pool_size], total weights assigned to each expert
+            dist_fn.all_reduce(batch_select)
+            dist_fn.all_reduce(weights_sum)
+            if self.training:
                 self.route_ema.mul_(self.ema_decay).add_((1 - self.ema_decay) * batch_select) # EMA update
                 self.weights_ema.mul_(self.ema_decay).add_((1 - self.ema_decay) * weights_sum) # EMA update
-
                 # Logging
-                load_focus = self.focus_metric(self.route_ema)
-                weight_focus = self.focus_metric(self.weights_ema)
-                register_extra_metric(self, f"load_focus{self.idx}", load_focus, op="mean")
-                register_extra_metric(self, f"weight_focus{self.idx}", weight_focus, op="mean")
-                register_extra_metric(self, f"route_temp", self.current_temp, op="mean")
-        
-        if not self.training and self.poolsize > 1:
-            with torch.no_grad():
-                batch_select = topk_mask.sum(dim=0) # [pool_size], how many times each expert chosen
-                weights_sum = prob_weights_norm.sum(dim=0) # [pool_size], total weights assigned to each expert
-                dist_fn.all_reduce(batch_select)
-                dist_fn.all_reduce(weights_sum)
+                register_extra_metric(self, f"shannon_w{self.idx}", self.cal_shannon_redundancy(self.weights_ema), op="mean")
+                register_extra_metric(self, f"cv_c{self.idx}", self.cal_variation_coefficient(self.route_ema), op="mean")
+                register_extra_metric(self, f"temperature", self.current_temperature, op="mean")
+                register_extra_metric(self, f"aux_loss_coef", self.current_aux_loss_coef, op="mean")
+                register_extra_metric(self, f"aux_loss_b_coef", self.current_aux_loss_b_coef, op="mean")
+                # Increment global step
+                if step is None:
+                    self.global_step.add_(1)
+            else:
                 self.route_ema_val.mul_(self.ema_decay).add_((1 - self.ema_decay) * batch_select) # EMA update
                 self.weights_ema_val.mul_(self.ema_decay).add_((1 - self.ema_decay) * weights_sum) # EMA update
-
                 # Logging
-                load_focus = self.focus_metric(self.route_ema_val)
-                weight_focus = self.focus_metric(self.weights_ema_val)
-                register_extra_metric(self, f"load_focus{self.idx}", load_focus, op="mean")
-                register_extra_metric(self, f"weight_focus{self.idx}", weight_focus, op="mean")
-        
-        # return prob_weights_norm for the original batch size
+                register_extra_metric(self, f"shannon_w_val{self.idx}", self.cal_shannon_redundancy(self.weights_ema_val), op="mean")
+                register_extra_metric(self, f"cv_c_val{self.idx}", self.cal_variation_coefficient(self.route_ema_val), op="mean")
+
+        # Unpack real batch from dummy batch
         prob_weights_norm = prob_weights_norm[-raw_batch_size:, :]
         topk_mask = topk_mask[-raw_batch_size:, :]
         indices = topk.indices[-raw_batch_size:, :]
@@ -630,7 +714,7 @@ class FeatExtractBranchNav(BranchNav):
     
     def train(self, mode = True):
         res = super().train(mode)
-        if mode:
+        if mode: # reset val counters
             self.route_ema_val.zero_()
             self.weights_ema_val.zero_()
         return res
