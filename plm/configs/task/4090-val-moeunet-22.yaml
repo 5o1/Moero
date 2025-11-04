@@ -2,11 +2,10 @@ seed_everything: 42
 trainer:
   accelerator: gpu
   precision: 32
-  devices: [0, 1, 3, 4, 6, 7]
-  strategy: ddp_find_unused_parameters_true
-  check_val_every_n_epoch: 1
+  devices: [0]
+  check_val_every_n_epoch: 4
   num_nodes: 1
-  max_epochs: 40
+  max_epochs: 48
   log_every_n_steps: 50 # log every n steps during training
   deterministic: false
   use_distributed_sampler: false # Use false because custom VolumeSamplers have been used
@@ -16,8 +15,8 @@ trainer:
       project: moero
       mode: online
       save_dir: /home/lyy/exp
-      tags: [moeunet, c6, cmr]
-      name: cmr25-1/4-linear
+      tags: [moeunet, c12, brainknee]
+      name: brainknee-22-val
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -37,4 +36,4 @@ trainer:
     #       init_args:
     #         keys: ["masked_kspace", "mask"]
 
-# ckpt_path: /home/lyy/exp/moero/awa929di/checkpoints/last.ckpt
+ckpt_path: /home/lyy/exp/moero/iu91wzdu/checkpoints/last.ckpt

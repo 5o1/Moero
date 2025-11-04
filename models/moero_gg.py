@@ -28,7 +28,7 @@ class CsmBlock(nn.Module):
         The input masked_kspace should be a complex tensor of shape (b, ref, adj, coils, h, w).
         The mask should be a float tensor of shape (b, ref, adj, 1, h, w).
     """
-    def __init__(self, model: nn.Module, cropsize_max = 128, cropsize_min = 48, ncalib_mincheck = 8,crop: bool = True):
+    def __init__(self, model: nn.Module, cropsize_max = 128, cropsize_min = 8, ncalib_mincheck = 8,crop: bool = True):
         super().__init__()
         self.cropsize_max = cropsize_max
         self.cropsize_min = cropsize_min
@@ -130,6 +130,7 @@ class SenseBlock(nn.Module):
         img_zf: torch.Tensor,
         mask: torch.Tensor,
         csm: torch.Tensor,
+        latent: torch.Tensor
     ):
         """
         complex
@@ -150,6 +151,11 @@ class SenseBlock(nn.Module):
         raw_channels = raw_channels + [noise.size(-3)]
         model_input = torch.cat([model_input, noise], dim=-3)
 
+        # Latent term
+        latent = self.norm(latent, is_fit = False)
+        raw_channels = raw_channels + [latent.size(-3)]
+        model_input = torch.cat([model_input, latent], dim=-3)
+
         # Model forward pass
         model_term = self.model(model_input)
 
@@ -157,7 +163,7 @@ class SenseBlock(nn.Module):
 
         # Split the output corresponding to each input
         model_term = torch.split(model_term, raw_channels, dim=-3)
-        model_term = model_term[0]
+        model_term, latent = model_term[0], model_term[-1]
 
         # DC
         dc_weight = self.dc_weight
@@ -168,7 +174,7 @@ class SenseBlock(nn.Module):
                 register_extra_metric(self, f"dc_weight_max", dc_weight.detach(), op ="max")
                 register_extra_metric(self, f"dc_weight_min", dc_weight.detach(), op ="min")
 
-        return current_img
+        return current_img, latent
 
     def get_model(self) -> torch.nn.Module:
         return self.model
@@ -250,10 +256,11 @@ class MoeroGG(nn.Module):
         # Initial reconstruction
         img_zf = self.sens_reduce(masked_kspace, csm)
         img_pred = img_zf.clone()
+        latent = img_zf.clone()
 
         for cascade_idx, cascade_unit in enumerate(self.cascades):
             try:
-                img_pred  = cascade_unit(img_pred,img_zf,mask,csm)
+                img_pred, latent  = cascade_unit(img_pred, img_zf, mask, csm, latent)
             except torch.cuda.OutOfMemoryError as e:
                 raise torch.cuda.OutOfMemoryError(
                     f"Out of memory in cascade {cascade_idx}. Input shape = {masked_kspace.shape}. Consider reducing cascades or datasize."

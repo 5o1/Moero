@@ -32,7 +32,7 @@ class CsmBlock(nn.Module):
         The input masked_kspace should be a complex tensor of shape (b, ref, adj, coils, h, w).
         The mask should be a float tensor of shape (b, ref, adj, 1, h, w).
     """
-    def __init__(self, model: nn.Module, cropsize_max = 128, cropsize_min = 48, ncalib_mincheck = 8,crop: bool = True):
+    def __init__(self, model: nn.Module, cropsize_max = 128, cropsize_min = 8, ncalib_mincheck = 8,crop: bool = True):
         super().__init__()
         self.cropsize_max = cropsize_max
         self.cropsize_min = cropsize_min

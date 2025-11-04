@@ -115,10 +115,10 @@ class Cmr25Module(MriModule):
                 for metric_name, metric_score in ctx_metric_dict.items():
                     self.log(f"val/{metric_name}", metric_score.detach(), prog_bar=True, sync_dist=True, batch_size=batch.masked_kspace.size(0))
 
-            output_d = ctx.get_outputs()
-            if "route_path" in output_d:
-                with open("/home/lyy/moero/route.txt", "a") as f:
-                    f.write(f"{batch.fname} {batch.seqidx} " + " ".join([str(v) for v in output_d["route_path"][0].tolist()]) + "\n")
+            # output_d = ctx.get_outputs()
+            # if "route_weight" in output_d:
+            #     with open("/home/lyy/moero/route.txt", "a") as f:
+            #         f.write(f"{batch.fname[0]} {batch.seqidx.tolist()} " + " ".join([str(v) for v in output_d["route_weight"].view(-1).tolist()]) + "\n")
 
         return CmrValidationOutputSample(
             img_pred=output,
