@@ -8,7 +8,7 @@ from utils.naneu.common.importlib import LazyModule
 from utils.naneu.helpers.context import ExtraContext
 from utils.naneu import fft
 
-class Cmr25Module(MriModule):
+class SbSModule(MriModule):
     loss_fn: torch.nn.Module
     def __init__(
         self,
@@ -59,17 +59,20 @@ class Cmr25Module(MriModule):
 
         with ExtraContext(self) as ctx:
             output_dict = self(batch.masked_kspace, batch.mask)
-            output = output_dict['img_pred']
-            target, output = center_crop_to_smallest(
-                batch.target, output)
-            
-            loss = self.loss_fn(
-                output, target, batch.datarange
-            )
+            output = output_dict['img_pred_list']
+            total_loss = 0.0
+            for i, out in enumerate(output):
+                target, out = center_crop_to_smallest(
+                    batch.target, out)
+                loss = self.loss_fn(
+                    out, target, batch.datarange
+                )
+                total_loss += loss
 
-            self.log("train/loss", loss.detach(), prog_bar=True, batch_size=batch.masked_kspace.size(0))
+                self.log(f"train/loss_step_{i}", loss.detach(), prog_bar=True, batch_size=batch.masked_kspace.size(0))
 
-            total_loss = loss
+            self.log("train/loss", total_loss.detach(), prog_bar=True, batch_size=batch.masked_kspace.size(0))
+
             if len(ctx_loss_dict:= ctx.get_losses()) > 0:
                 for loss_name, loss_score in ctx_loss_dict.items():
                     total_loss += loss_score
@@ -168,3 +171,4 @@ class Cmr25Module(MriModule):
             seqidx=batch.seqidx,
             seqshape=batch.seqshape
         )
+    

@@ -6,6 +6,6 @@ from .moero import(
     Moero
 )
 
-from .promptmr import(
-    PromptMR
+from .promptmrp import(
+    PromptMRp
 )

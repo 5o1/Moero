@@ -13,7 +13,7 @@ data:
         transform: 
           class_path: datasets.Cmr25TrainingTransform
           init_args: {
-            acc_factors: [4, 8],
+            acc_factors: [4],
             n_calibs: [20],
             mask_weights: {
                 Uniform: 1,
@@ -23,7 +23,7 @@ data:
           }
 
     val_configs:
-      - path: /data/liyuyang/brain-knee/val-brain/
+      - path: /data/liyuyang/brain-knee/val-knee/
         dataset_class: *datasetclasspath
         dataset_init_args:
           <<: *traininitargs

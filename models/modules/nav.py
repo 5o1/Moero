@@ -655,6 +655,7 @@ class FeatExtractBranchNav(BranchNav):
         # Compute softmax over all experts for weights
         if self.cluster == "prototype" and self.prototype_act == "energy":
             prob_all = logits ** 2
+            prob_all = prob_all / (prob_all.sum(dim=-1, keepdim=True) + self.eps)
         else:
             prob_all = torch.softmax((logits).float(), dim=-1).to(logits.dtype)  # [B, pool_size]
 
