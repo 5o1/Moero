@@ -23,6 +23,22 @@ data:
           }
 
     val_configs:
+      # - path: /home/lyy/dataset/braint2/val
+      #   dataset_class: *datasetclasspath
+      #   dataset_init_args:
+      #     <<: *traininitargs
+      #     transform: 
+      #       class_path: datasets.Cmr25TrainingTransform
+      #       init_args: {
+      #         acc_factors: [4],
+      #         n_calibs: [20],
+      #         mask_weights: {
+      #             Uniform: 1,
+      #             ktGaussian: 0,
+      #             ktRadial: 0,
+      #         }
+      #       }
+
       - path: /home/lyy/dataset/brain-knee/val-brain/
         dataset_class: *datasetclasspath
         dataset_init_args:

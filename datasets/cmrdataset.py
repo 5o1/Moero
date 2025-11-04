@@ -186,13 +186,13 @@ class CmrDatasetBase(torch.utils.data.Dataset):
                 grid_t = grid_t.ravel()
                 grid_s = grid_s.ravel()
 
-                kdata = self.np_getitem_complex_batch_fast(kspace, grid_t, grid_s)
+                kdata = self.np_getitem_complex_batch(kspace, grid_t, grid_s)
                 self._check_data(kdata, (adj_tis, adj_sis), fname)
 
                 kdata = rearrange(kdata, "(t s) c h w -> t s c h w", t = len(adj_tis), s = len(adj_sis))
                 kdata = torch.as_tensor(kdata)
 
-                rss = self.np_getitem_complex_batch_fast(rss, ti, zi)
+                rss = self.np_getitem_complex(rss, ti, zi)
                 self._check_data(rss, (ti, zi), fname)
                 rss = torch.as_tensor(rss).squeeze(0)
                 if rss.ndim != 2:

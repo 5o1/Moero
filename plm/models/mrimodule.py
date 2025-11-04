@@ -93,6 +93,8 @@ class MriModule(pl.LightningModule):
         self.TotExamples = DistributedMetricSum()
         self.TotSliceExamples = DistributedMetricSum()
 
+        self.best_slice = dict()
+
     def log_image(self, key, images, captions):
         self.logger.log_image(key, images, caption=captions, step=self.global_step) # wandb
 
@@ -152,6 +154,26 @@ class MriModule(pl.LightningModule):
             ssim_vals[fname][seq_idx] = 1 - self.ssim_fn(target, img_pred, datarange)
             dataranges[fname] = datarange.clone()
 
+            # save best slice
+            if dataloader_idx not in self.best_slice:
+                self.best_slice[dataloader_idx] = {
+                    "nmse": mse_vals[fname][seq_idx] / target_norms[fname][seq_idx],
+                    "ssim": ssim_vals[fname][seq_idx],
+                    "psnr": 20 * torch.log10(datarange) - 10 * torch.log10(mse_vals[fname][seq_idx]),
+                    "fname": fname,
+                    "seqidx": seq_idx.tolist(),
+                }
+            else:
+                current_ssim = ssim_vals[fname][seq_idx]
+                if current_ssim > self.best_slice[dataloader_idx]["ssim"]:
+                    self.best_slice[dataloader_idx] = {
+                        "nmse": mse_vals[fname][seq_idx] / target_norms[fname][seq_idx],
+                        "ssim": current_ssim,
+                        "psnr": 20 * torch.log10(datarange) - 10 * torch.log10(mse_vals[fname][seq_idx]),
+                        "fname": fname,
+                        "seqidx": seq_idx.tolist(),
+                    }
+
         self.val_logs[dataloader_idx].append({
             "val_loss": outputs.loss.clone(), # issue: https://discuss.pytorch.org/t/pytorch-cannot-allocate-memory/134754/19
             "mse_vals": dict(mse_vals),
@@ -167,6 +189,10 @@ class MriModule(pl.LightningModule):
                     print(name)
 
     def on_validation_epoch_end(self):
+        for dataloader_idx, best_slice in self.best_slice.items():
+            print(f"Dataloader {dataloader_idx} Best Slice - Fname: {best_slice['fname']}, SeqIdx: {best_slice['seqidx']}, NMSE: {best_slice['nmse'].item():.6f}, SSIM: {best_slice['ssim'].item():.6f}, PSNR: {best_slice['psnr'].item():.2f}dB")
+        self.best_slice = dict()
+
         for dataloader_idx, val_logs in self.val_logs.items():
             # aggregate losses
             losses = []

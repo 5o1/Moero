@@ -63,12 +63,14 @@ class AsyncTensorWriterPool:
             self.executor.shutdown(wait=True)
 
 class CmrWriter(BasePredictionWriter):
-    def __init__(self, output_dir: PathLike | str, save_zf: bool = False, save_csm: bool = False, save_target: bool = False):
+    def __init__(self, output_dir: PathLike | str, save_zf: bool = False, save_csm: bool = False, save_target: bool = False, save_mask: bool = False, save_masked_kspace: bool = False):
         super().__init__('batch')
         self.output_dir = output_dir
         self.save_zf = save_zf
         self.save_csm = save_csm
         self.save_target = save_target
+        self.save_mask = save_mask
+        self.save_masked_kspace = save_masked_kspace
 
         self.pred_constructor_dict: Dict[str, GridConstructor] = defaultdict(GridConstructor)
         if save_zf:
@@ -77,6 +79,10 @@ class CmrWriter(BasePredictionWriter):
             self.csm_constructor_dict: Dict[str, GridConstructor] = defaultdict(GridConstructor)
         if save_target:
             self.target_constructor_dict: Dict[str, GridConstructor] = defaultdict(GridConstructor)
+        if save_mask:
+            self.mask_constructor_dict: Dict[str, GridConstructor] = defaultdict(GridConstructor)
+        if save_masked_kspace:
+            self.masked_kspace_constructor_dict: Dict[str, GridConstructor] = defaultdict(GridConstructor)
         
         self.debug_constructor_dict: Dict[str, Dict[str, GridConstructor]] = defaultdict(lambda: defaultdict(GridConstructor))
 
@@ -126,6 +132,10 @@ class CmrWriter(BasePredictionWriter):
                     self.construct(self.csm_constructor_dict, f"{f}.csm", tuple(seqidx[i]), tuple(seqshape[i]), prediction['csm'][i])
                 if self.save_target:
                     self.construct(self.target_constructor_dict, f"{f}.target", tuple(seqidx[i]), tuple(seqshape[i]), batch['target'][i])
+                if self.save_mask:
+                    self.construct(self.mask_constructor_dict, f"{f}.mask", tuple(seqidx[i]), tuple(seqshape[i]), batch['mask'][i])
+                if self.save_masked_kspace:
+                    self.construct(self.masked_kspace_constructor_dict, f"{f}.masked_kspace", tuple(seqidx[i]), tuple(seqshape[i]), batch['masked_kspace'][i])
 
                 for debug_name, debug_tensor in debug_terms.items():
                     self.construct(
@@ -143,6 +153,10 @@ class CmrWriter(BasePredictionWriter):
                 self.construct(self.csm_constructor_dict, fname + ".csm", tuple(seqidx), tuple(seqshape), prediction['csm'])
             if self.save_target:
                 self.construct(self.target_constructor_dict, fname + ".target", tuple(seqidx), tuple(seqshape), batch['target'])
+            if self.save_mask:
+                self.construct(self.mask_constructor_dict, fname + ".mask", tuple(seqidx), tuple(seqshape), batch['mask'])
+            if self.save_masked_kspace:
+                self.construct(self.masked_kspace_constructor_dict, fname + ".masked_kspace", tuple(seqidx), tuple(seqshape), batch['masked_kspace'])
 
             for debug_name, debug_tensor in debug_terms.items():
                 self.construct(
