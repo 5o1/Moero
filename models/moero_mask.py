@@ -7,8 +7,10 @@ from utils.naneu.helpers.context import register_extra_output, register_extra_me
 from utils.algos.acs import find_max_square
 from utils.complex import interpolate
 from .modules.format import Format4Unet2d
-from data.transforms.crop import center_crop, make_center_mask
+from data.transforms.crop import center_crop, make_center_mask, center_fill_
 from warnings import warn
+from data.transforms.maskgenerator import KtGaussianMaskGenerator
+from einops import rearrange
 
 class CsmBlock(nn.Module):
     """
@@ -28,7 +30,7 @@ class CsmBlock(nn.Module):
         The input masked_kspace should be a complex tensor of shape (b, ref, adj, coils, h, w).
         The mask should be a float tensor of shape (b, ref, adj, 1, h, w).
     """
-    def __init__(self, model: nn.Module, cropsize_max = 128, cropsize_min = 8, ncalib_mincheck = 8,crop: bool = True):
+    def __init__(self, model: nn.Module, cropsize_max = 128, cropsize_min = 48, ncalib_mincheck = 8,crop: bool = True):
         super().__init__()
         self.cropsize_max = cropsize_max
         self.cropsize_min = cropsize_min
@@ -84,10 +86,6 @@ class CsmBlock(nn.Module):
 
         masked_image = self.norm(masked_image)
         csm = self.model(masked_image)
-
-        if isinstance(csm, tuple):
-            csm = csm[0]
-
         csm = self.norm.pad_adjoint(csm)
 
         if self.is_crop:
@@ -115,12 +113,15 @@ class SenseBlock(nn.Module):
     def __init__(
             self,
             model: nn.Module,
+            n_extend: int = 0,
             ):
         super().__init__()
         self.model = model.view_as_real(for_input = [0], for_output = [0]).rearrange("b ref adj c h w two-> b ref (adj c two) h w", for_input = [0], for_output = [0])
 
         self.norm: Format4Unet2d = Format4Unet2d(ndownsample=self.model.depth, is_resize=False)
         self.dc_weight = nn.Parameter(torch.tensor(1.0, dtype = torch.float32))  # DC weight for the model
+        self.mask_gen = KtGaussianMaskGenerator(accel_factors=[9], ncalibs=[20])
+        self.n_extend = n_extend
 
     def sense_expand(self, img: torch.Tensor, csm: torch.Tensor) -> torch.Tensor:
         return fft.itok(img * csm)
@@ -134,15 +135,22 @@ class SenseBlock(nn.Module):
         img_zf: torch.Tensor,
         mask: torch.Tensor,
         csm: torch.Tensor,
-        latent: torch.Tensor
     ):
         """
         complex
         b ref adj c h w
         """
         ffx = self.sense_reduce(self.sense_expand(current_img, csm) * mask, csm)
+
+        masks,_,_ = self.mask_gen([self.n_extend] + list(ffx.shape[-2:]))
+        center_fill_(masks, (20,20), 1.0)
+        masks = rearrange(masks, "n h w -> n 1 1 1 1 h w")
+
+        ffx_extend = self.sense_reduce(self.sense_expand(current_img, csm) * masks, csm)
+        ffx_extend = rearrange(ffx_extend, "n b ref adj c h w -> b ref adj (n c) h w")
+
         # buffer: A^H(A(x)), s_i, x0
-        model_input = [current_img, img_zf, ffx]
+        model_input = [current_img, img_zf, ffx, ffx_extend]
         raw_channels = [x.size(-3) for x in model_input]
         model_input = torch.cat(model_input, dim=-3)  # Concatenate along channel dimension
 
@@ -155,11 +163,6 @@ class SenseBlock(nn.Module):
         raw_channels = raw_channels + [noise.size(-3)]
         model_input = torch.cat([model_input, noise], dim=-3)
 
-        # Latent term
-        latent = self.norm(latent, is_fit = False)
-        raw_channels = raw_channels + [latent.size(-3)]
-        model_input = torch.cat([model_input, latent], dim=-3)
-
         # Model forward pass
         model_term = self.model(model_input)
 
@@ -167,7 +170,7 @@ class SenseBlock(nn.Module):
 
         # Split the output corresponding to each input
         model_term = torch.split(model_term, raw_channels, dim=-3)
-        model_term, latent = model_term[0], model_term[-1]
+        model_term = model_term[0]
 
         # DC
         dc_weight = self.dc_weight
@@ -178,13 +181,13 @@ class SenseBlock(nn.Module):
                 register_extra_metric(self, f"dc_weight_max", dc_weight.detach(), op ="max")
                 register_extra_metric(self, f"dc_weight_min", dc_weight.detach(), op ="min")
 
-        return current_img, latent
+        return current_img
 
     def get_model(self) -> torch.nn.Module:
         return self.model
 
 
-class MoeroGG(nn.Module):
+class MoeroMask(nn.Module):
     """
     Modular Cascaded Reconstruction Network
 
@@ -260,11 +263,10 @@ class MoeroGG(nn.Module):
         # Initial reconstruction
         img_zf = self.sens_reduce(masked_kspace, csm)
         img_pred = img_zf.clone()
-        latent = img_zf.clone()
 
         for cascade_idx, cascade_unit in enumerate(self.cascades):
             try:
-                img_pred, latent  = cascade_unit(img_pred, img_zf, mask, csm, latent)
+                img_pred  = cascade_unit(img_pred,img_zf,mask,csm)
             except torch.cuda.OutOfMemoryError as e:
                 raise torch.cuda.OutOfMemoryError(
                     f"Out of memory in cascade {cascade_idx}. Input shape = {masked_kspace.shape}. Consider reducing cascades or datasize."

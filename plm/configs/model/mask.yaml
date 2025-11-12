@@ -6,10 +6,12 @@ model:
       weight_decay: 1e-2
 
     model:
-      class_path: models.moero_gg.MoeroGG
+      class_path: models.moero_mask.MoeroMask
       init_args:
         csmblock_kwargs:
           crop: true
+        senseblock_kwargs:
+          n_extend: 3
 
         csm_model:
           class_path: models.backbones.Unet
@@ -28,8 +30,8 @@ model:
         cascades: 
           - class_path: models.backbones.Lvup
             init_args: &cascadebase
-              in_channels: 8
-              out_channels: 8
+              in_channels: 14
+              out_channels: 14
               pyramid_channels:  [16, 20, 24, 28]
               prompt_tokens: [8, 8, 8]
               prompt_channels: [10, 12, 14]
@@ -38,8 +40,8 @@ model:
               n_dec_cab: [2, 2, 3]
               n_skip_cab: [1, 1, 1, 3]
               reduction: 1
-              moe_top_k: 2
-              moe_poolsize: 4
+              moe_top_k: 1
+              moe_poolsize: 1
               gate_class_path: models.modules.nav.FeatExtractBranchNav
               gate_init_args:
                 pyramid_channels: [32, 64, 128, 256]
@@ -47,7 +49,7 @@ model:
                 cluster: "prototype"
                 prototype_act : energy
                 use_residual_expert: false
-                batch_cache_size: 20
+                batch_cache_size: 0
                 balance_prior_lambda: 0.0
                 z_loss_coef: 1e-3
                 aux_loss_coef: 1e-1

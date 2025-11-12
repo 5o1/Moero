@@ -1,0 +1,80 @@
+model:
+  class_path: plm.models.Cmr25Module
+  init_args:
+    optimizer_init_kwargs:
+      lr: 0.0002
+      weight_decay: 1e-2
+
+    model:
+      class_path: models.stepbystep.StepByStepVarnet
+      init_args:
+        csmblock_kwargs:
+          crop: true
+
+        csm_model:
+          class_path: models.backbones.Unet
+          init_args:
+            in_channels: 2
+            out_channels: 2
+            pyramid_channels: [8, 12, 16, 20]
+            n_enc_cab: [2, 3, 3]
+            n_dec_cab: [2, 2, 3]
+            n_skip_cab: [1, 1, 1, 3]
+            reduction: 1
+            idx_cascade: null
+            
+        cascades: 
+          - class_path: models.backbones.Unet
+            init_args: &cascadebase
+              in_channels: 8
+              out_channels: 8
+              pyramid_channels: [32, 48, 64, 80]
+              n_enc_cab: [2, 3, 3]
+              n_dec_cab: [2, 2, 3]
+              n_skip_cab: [1, 1, 1, 3]
+              reduction: 1
+              idx_cascade: 0
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 1
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 2
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 3
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 4
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 5
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 6
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 7
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 8
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 9
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 10
+          - class_path: models.backbones.Unet
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 11

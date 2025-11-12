@@ -53,13 +53,15 @@ class Decoder(nn.Module):
         kernel_size: int = 3,
         reduction: float | int = 2,
         dropout: float = 0.0,
-        decoder_expand: int = 0,
         idx_cascade: int = None,
+        n_history: int = 0,
         bias: bool = True,
         norm: bool = False,
     ):
         super().__init__()
         self.depth = len(pyramid_channels) - 1
+        self.n_history = n_history
+
         self.idx_cascade = idx_cascade
         # Skip Connections - 3 SkipBlocks
         self.skip = torch.nn.ModuleList([
@@ -76,20 +78,26 @@ class Decoder(nn.Module):
             for i in range(self.depth)
         ])
         self.dec = torch.nn.ModuleList([
-            PromptUpBlock(pyramid_channels[i + 1], pyramid_channels[i], prompt_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, decoder_expand, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
+            PromptUpBlock(pyramid_channels[i + 1], pyramid_channels[i], prompt_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, n_history=n_history, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
             for i in range(self.depth)
         ])
 
 
-    def forward(self, x: torch.Tensor, residual: List[torch.Tensor]):
+    def forward(self, x: torch.Tensor, residual: List[torch.Tensor], history: None | List[List[torch.Tensor]] = None) -> torch.Tensor:
+        cache = [None for _ in range(self.depth)]
+
         # 1. bottleneck
         x = self.skip_bottleneck(x)
-
+        
         # 2. decoder
         for i in range(self.depth - 1, -1, -1):
-            x = self.dec[i](x, self.prompt[i](x), self.skip[i](residual[i]))
+            if self.n_history > 0:
+                cache[i] = x.clone()
+                x = self.dec[i](x, self.prompt[i](x), self.skip[i](residual[i]), history[i])
+            else:
+                x = self.dec[i](x, self.prompt[i](x), self.skip[i](residual[i]))
 
-        return x
+        return x, cache
 
 
 class LvupModem(nn.Module):
@@ -111,12 +119,16 @@ class LvupModem(nn.Module):
             kernel_size: int = 3,
             reduction: float | int = 2,
             dropout: float = 0.0,
-            decoder_expand: int = 0,
             idx_cascade: int = None,
+            n_history: int = 0,
             bias: bool = True,
             norm: bool = False,
         ):
+        if n_history > 0 and moe_top_k > 1:
+            raise ValueError("Top-k > 1 with history is not supported yet.")
+
         self.depth = len(pyramid_channels) - 1
+        self.n_history = n_history
         if not all([
             len(pyramid_channels) == self.depth + 1,
             len(n_dec_cab) == self.depth,
@@ -163,8 +175,8 @@ class LvupModem(nn.Module):
                 kernel_size=kernel_size,
                 reduction=reduction,
                 dropout=dropout,
-                decoder_expand=decoder_expand,
                 idx_cascade=idx_cascade,
+                n_history=n_history,
                 bias=bias,
                 norm=norm,
             ) for _ in range(self.moe_poolsize)
@@ -212,11 +224,26 @@ class LvupModem(nn.Module):
 
         dist.barrier(group=process_group)
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, history: List[List[torch.Tensor]] | None = None):
         """
         Real. Complex dimension have bound to channel dimension.
         x : b ref c h w
         """
+        if history is None or not self.n_history > 0:
+            history = [None for _ in range(self.depth)]
+        else:
+            n_cached = len(history[0])
+            if not all(n_cached == len(history[d]) for d in range(1, len(history), 1)):
+                raise ValueError(f"History must be a list of lists with the same length. Got {[len(h) for h in history]}.")
+            if n_cached == 0: # Initialization
+                history = [None for _ in range(self.depth)]
+            else:
+                if n_cached < self.n_history: # Padding by first history
+                    history = [torch.cat(h[:1] * (self.n_history - n_cached) + h, dim=-3)  for h in history]
+                else: # Use last self.n_history history
+                    history = [torch.cat(h[-self.n_history:], dim=-3) for h in history]
+
+
         residual = [None for _ in range(self.depth)]
 
         # 0. featue extraction
@@ -245,12 +272,12 @@ class LvupModem(nn.Module):
 
             # To sparse the batch
             batch_indices = route_mask[:, expert_idx].nonzero(as_tuple=True)[0] # Indices of samples that select this expert
-            
-            x_expert = expert(
+            x_expert, cache = expert(
                 x[batch_indices],
-                [residual[ilevel][batch_indices] for ilevel in range(len(residual))]
+                [residual[ilevel][batch_indices] for ilevel in range(len(residual))],
+                history=history
             )
-            # Initialize the dense lists 
+            # Initialize the dense lists
             if x_dense is None:
                 x_dense = torch.zeros(x.size(0), *x_expert.shape[1:], device=x_expert.device, dtype=x_expert.dtype)
 
@@ -262,4 +289,7 @@ class LvupModem(nn.Module):
         x = self.demodem(x)
         x = self.to_output(x)
 
-        return x
+        if self.n_history > 0:
+            return x, cache
+        else:
+            return x
