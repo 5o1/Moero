@@ -185,7 +185,7 @@ class SenseBlock(nn.Module):
         return current_img, latent, feat_cached
 
 
-class PromptMR(nn.Module):
+class PromptMRp(nn.Module):
     """
     Modular Cascaded Reconstruction Network
 

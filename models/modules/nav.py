@@ -1482,7 +1482,7 @@ class RouterCenter(BranchNav):
     ) -> Tuple[Tensor, Tensor, LongTensor, dict]:
         # Increment global step
         with torch.no_grad():
-            if step is None:
+            if step is None and self.training:
                 self.global_step.add_(1)
                 register_extra_metric(self, f"global_step", self.global_step, op="max")
         
@@ -1577,14 +1577,14 @@ class RouterCenter(BranchNav):
         prob_all = torch.softmax((logits).float(), dim=-1).to(logits.dtype)  # [B, pool_size]
 
         # auxiliary loss for global balance
-        if self.aux_loss_coef > 0.0 and self.training and self.global_step > self.n_skip:
+        if self.training and aux_loss_coef > 0.0 and self.global_step > self.n_skip:
             route_count = self.counter.float()
             route_freq = route_count / (route_count.sum() + self.eps)
             aux_loss = (route_freq * prob_all).sum(dim=-1).mean() * aux_loss_coef
             register_extra_loss(self, f"global_auxloss", aux_loss, op="sum")
 
         # probability sparsity loss for sparsing the weights
-        if self.prob_sparse_loss_coef > 0.0 and self.training and self.global_step > self.n_skip:
+        if self.training and self.prob_sparse_loss_coef > 0.0 and self.global_step > self.n_skip:
             log_prob = torch.log_softmax(logits.float(), dim=-1)
             p = log_prob.exp()
             prob_sparse_loss = - (p * log_prob).sum(dim=-1).mean() * self.prob_sparse_loss_coef
@@ -1597,7 +1597,7 @@ class RouterCenter(BranchNav):
         topk_mask = torch.zeros_like(logits).scatter_(dim=-1, index=topk.indices, value=1.0)  # [B, pool_size]
 
         # auxiliary loss for batch balance
-        if self.aux_loss_batch_coef > 0.0 and self.training and self.global_step > self.n_skip:
+        if self.training and aux_loss_b_coef > 0.0 and self.global_step > self.n_skip:
             with torch.no_grad():
                 batch_select = topk_mask.sum(dim=0) # [pool_size], how many times each expert chosen
                 dist_fn.all_reduce(batch_select)

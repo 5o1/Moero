@@ -38,8 +38,8 @@ model:
               n_dec_cab: [2, 2, 3]
               n_skip_cab: [1, 1, 1, 3]
               reduction: 1
-              moe_top_k: 1
-              moe_poolsize: 4
+              moe_top_k: 2
+              moe_poolsize: 8
               gate_class_path: models.modules.nav.RouterCenter
               gate_init_args:
                 embedding_channels: 1024

@@ -1,0 +1,575 @@
+# lightning.pytorch==2.6.0dev0
+seed_everything: 42
+trainer:
+  accelerator: gpu
+  strategy: ddp_find_unused_parameters_true
+  devices: [1, 2, 3]
+  num_nodes: 1
+  precision: 32
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      name: cmr25-1/4-linear
+      save_dir: /home/lyy/exp
+      version: null
+      offline: false
+      dir: null
+      id: null
+      anonymous: null
+      project: moero
+      log_model: false
+      experiment: null
+      prefix: ''
+      checkpoint_name: null
+      add_file_policy: mutable
+      entity: null
+      notes: null
+      tags:
+      - moeunet
+      - c6
+      - cmr
+      config: null
+      config_exclude_keys: null
+      config_include_keys: null
+      allow_val_change: null
+      group: null
+      job_type: null
+      mode: online
+      force: null
+      reinit: null
+      resume: null
+      resume_from: null
+      fork_from: null
+      save_code: null
+      tensorboard: null
+      sync_tensorboard: null
+      monitor_gym: null
+      settings: null
+  callbacks:
+  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+    init_args:
+      dirpath: null
+      filename: null
+      monitor: val0/loss
+      verbose: false
+      save_last: true
+      save_top_k: 1
+      save_on_exception: false
+      save_weights_only: false
+      mode: min
+      auto_insert_metric_name: true
+      every_n_train_steps: null
+      train_time_interval: null
+      every_n_epochs: null
+      save_on_train_epoch_end: null
+      enable_version_counter: true
+  - class_path: plm.callbacks.progbar.MultiColumnRichProgressBar
+    init_args:
+      metrics_ncols: 5
+  - class_path: plm.callbacks.MatmulPrecisionCallback
+    init_args:
+      precision: high
+  - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    init_args:
+      logging_interval: null
+      log_momentum: false
+      log_weight_decay: false
+  fast_dev_run: false
+  max_epochs: 40
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  overfit_batches: 0.0
+  val_check_interval: null
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: null
+  log_every_n_steps: 50
+  enable_checkpointing: null
+  enable_progress_bar: null
+  enable_model_summary: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: null
+  gradient_clip_algorithm: null
+  deterministic: false
+  benchmark: null
+  inference_mode: true
+  use_distributed_sampler: false
+  profiler: null
+  detect_anomaly: false
+  barebones: false
+  plugins: null
+  sync_batchnorm: false
+  reload_dataloaders_every_n_epochs: 0
+  default_root_dir: null
+  enable_autolog_hparams: true
+  model_registry: null
+model:
+  class_path: plm.models.Cmr25Module
+  init_args:
+    model:
+      class_path: models.moero_gg.MoeroGG
+      init_args:
+        csm_model:
+          class_path: models.backbones.Unet
+          init_args:
+            in_channels: 10
+            out_channels: 10
+            pyramid_channels:
+            - 4
+            - 8
+            - 12
+            - 16
+            n_enc_cab:
+            - 2
+            - 3
+            - 3
+            n_dec_cab:
+            - 2
+            - 2
+            - 3
+            n_skip_cab:
+            - 1
+            - 1
+            - 1
+            - 3
+            kernel_size: 3
+            reduction: 1.0
+            dropout: 0.0
+            decoder_expand: 0
+            idx_cascade: null
+            bias: false
+            norm: false
+        cascades:
+        - class_path: models.backbones.lvupmodem.LvupModem
+          init_args:
+            in_channels: 50
+            out_channels: 50
+            pyramid_channels:
+            - 32
+            - 48
+            - 64
+            - 80
+            prompt_tokens:
+            - 8
+            - 8
+            - 8
+            prompt_channels:
+            - 24
+            - 32
+            - 40
+            prompt_figsize:
+            - 64
+            - 32
+            - 16
+            n_enc_cab:
+            - 2
+            - 3
+            - 3
+            n_dec_cab:
+            - 2
+            - 2
+            - 3
+            n_skip_cab:
+            - 1
+            - 1
+            - 1
+            - 3
+            moe_poolsize: 4
+            moe_top_k: 1
+            gate_class_path: models.modules.nav.RouterCenter
+            gate_init_args:
+              embedding_channels: 1024
+              n_cab: 2
+              cluster: linear
+              prototype_update_interval: null
+              batch_cache_size: 50
+              balance_prior_lambda: 0.0
+              z_loss_coef: 0
+              aux_loss_coef: 0
+              aux_loss_batch_coef: 0.1
+              prob_sparse_loss_coef: 0.05
+              aux_loss_coef_min: 0
+              aux_loss_batch_coef_min: 0.01
+              aux_loss_decay_type: linear
+              aux_loss_step0: 65000
+              aux_loss_stepn: 80000
+              detach: true
+              n_skip: 10000
+              sync_until_step: 65000
+              temp_init: 1.0
+              temp_min: 0.0
+              temp_decay_type: exp
+              temp_decay_steps: 10000
+              temp_gamma: 0.9995
+            kernel_size: 3
+            reduction: 1.0
+            dropout: 0.0
+            decoder_expand: 0
+            idx_cascade: 0
+            bias: false
+            norm: false
+        - class_path: models.backbones.lvupmodem.LvupModem
+          init_args:
+            in_channels: 50
+            out_channels: 50
+            pyramid_channels:
+            - 32
+            - 48
+            - 64
+            - 80
+            prompt_tokens:
+            - 8
+            - 8
+            - 8
+            prompt_channels:
+            - 24
+            - 32
+            - 40
+            prompt_figsize:
+            - 64
+            - 32
+            - 16
+            n_enc_cab:
+            - 2
+            - 3
+            - 3
+            n_dec_cab:
+            - 2
+            - 2
+            - 3
+            n_skip_cab:
+            - 1
+            - 1
+            - 1
+            - 3
+            moe_poolsize: 4
+            moe_top_k: 1
+            gate_class_path: models.modules.nav.RouterCenter
+            gate_init_args:
+              embedding_channels: 1024
+              n_cab: 2
+              cluster: linear
+              prototype_update_interval: null
+              batch_cache_size: 50
+              balance_prior_lambda: 0.0
+              z_loss_coef: 0
+              aux_loss_coef: 0
+              aux_loss_batch_coef: 0.1
+              prob_sparse_loss_coef: 0.05
+              aux_loss_coef_min: 0
+              aux_loss_batch_coef_min: 0.01
+              aux_loss_decay_type: linear
+              aux_loss_step0: 65000
+              aux_loss_stepn: 80000
+              detach: true
+              n_skip: 10000
+              sync_until_step: 65000
+              temp_init: 1.0
+              temp_min: 0.0
+              temp_decay_type: exp
+              temp_decay_steps: 10000
+              temp_gamma: 0.9995
+            kernel_size: 3
+            reduction: 1.0
+            dropout: 0.0
+            decoder_expand: 0
+            idx_cascade: 1
+            bias: false
+            norm: false
+        - class_path: models.backbones.lvupmodem.LvupModem
+          init_args:
+            in_channels: 50
+            out_channels: 50
+            pyramid_channels:
+            - 32
+            - 48
+            - 64
+            - 80
+            prompt_tokens:
+            - 8
+            - 8
+            - 8
+            prompt_channels:
+            - 24
+            - 32
+            - 40
+            prompt_figsize:
+            - 64
+            - 32
+            - 16
+            n_enc_cab:
+            - 2
+            - 3
+            - 3
+            n_dec_cab:
+            - 2
+            - 2
+            - 3
+            n_skip_cab:
+            - 1
+            - 1
+            - 1
+            - 3
+            moe_poolsize: 4
+            moe_top_k: 1
+            gate_class_path: models.modules.nav.RouterCenter
+            gate_init_args:
+              embedding_channels: 1024
+              n_cab: 2
+              cluster: linear
+              prototype_update_interval: null
+              batch_cache_size: 50
+              balance_prior_lambda: 0.0
+              z_loss_coef: 0
+              aux_loss_coef: 0
+              aux_loss_batch_coef: 0.1
+              prob_sparse_loss_coef: 0.05
+              aux_loss_coef_min: 0
+              aux_loss_batch_coef_min: 0.01
+              aux_loss_decay_type: linear
+              aux_loss_step0: 65000
+              aux_loss_stepn: 80000
+              detach: true
+              n_skip: 10000
+              sync_until_step: 65000
+              temp_init: 1.0
+              temp_min: 0.0
+              temp_decay_type: exp
+              temp_decay_steps: 10000
+              temp_gamma: 0.9995
+            kernel_size: 3
+            reduction: 1.0
+            dropout: 0.0
+            decoder_expand: 0
+            idx_cascade: 2
+            bias: false
+            norm: false
+        - class_path: models.backbones.lvupmodem.LvupModem
+          init_args:
+            in_channels: 50
+            out_channels: 50
+            pyramid_channels:
+            - 32
+            - 48
+            - 64
+            - 80
+            prompt_tokens:
+            - 8
+            - 8
+            - 8
+            prompt_channels:
+            - 24
+            - 32
+            - 40
+            prompt_figsize:
+            - 64
+            - 32
+            - 16
+            n_enc_cab:
+            - 2
+            - 3
+            - 3
+            n_dec_cab:
+            - 2
+            - 2
+            - 3
+            n_skip_cab:
+            - 1
+            - 1
+            - 1
+            - 3
+            moe_poolsize: 4
+            moe_top_k: 1
+            gate_class_path: models.modules.nav.RouterCenter
+            gate_init_args:
+              embedding_channels: 1024
+              n_cab: 2
+              cluster: linear
+              prototype_update_interval: null
+              batch_cache_size: 50
+              balance_prior_lambda: 0.0
+              z_loss_coef: 0
+              aux_loss_coef: 0
+              aux_loss_batch_coef: 0.1
+              prob_sparse_loss_coef: 0.05
+              aux_loss_coef_min: 0
+              aux_loss_batch_coef_min: 0.01
+              aux_loss_decay_type: linear
+              aux_loss_step0: 65000
+              aux_loss_stepn: 80000
+              detach: true
+              n_skip: 10000
+              sync_until_step: 65000
+              temp_init: 1.0
+              temp_min: 0.0
+              temp_decay_type: exp
+              temp_decay_steps: 10000
+              temp_gamma: 0.9995
+            kernel_size: 3
+            reduction: 1.0
+            dropout: 0.0
+            decoder_expand: 0
+            idx_cascade: 3
+            bias: false
+            norm: false
+        - class_path: models.backbones.lvupmodem.LvupModem
+          init_args:
+            in_channels: 50
+            out_channels: 50
+            pyramid_channels:
+            - 32
+            - 48
+            - 64
+            - 80
+            prompt_tokens:
+            - 8
+            - 8
+            - 8
+            prompt_channels:
+            - 24
+            - 32
+            - 40
+            prompt_figsize:
+            - 64
+            - 32
+            - 16
+            n_enc_cab:
+            - 2
+            - 3
+            - 3
+            n_dec_cab:
+            - 2
+            - 2
+            - 3
+            n_skip_cab:
+            - 1
+            - 1
+            - 1
+            - 3
+            moe_poolsize: 4
+            moe_top_k: 1
+            gate_class_path: models.modules.nav.RouterCenter
+            gate_init_args:
+              embedding_channels: 1024
+              n_cab: 2
+              cluster: linear
+              prototype_update_interval: null
+              batch_cache_size: 50
+              balance_prior_lambda: 0.0
+              z_loss_coef: 0
+              aux_loss_coef: 0
+              aux_loss_batch_coef: 0.1
+              prob_sparse_loss_coef: 0.05
+              aux_loss_coef_min: 0
+              aux_loss_batch_coef_min: 0.01
+              aux_loss_decay_type: linear
+              aux_loss_step0: 65000
+              aux_loss_stepn: 80000
+              detach: true
+              n_skip: 10000
+              sync_until_step: 65000
+              temp_init: 1.0
+              temp_min: 0.0
+              temp_decay_type: exp
+              temp_decay_steps: 10000
+              temp_gamma: 0.9995
+            kernel_size: 3
+            reduction: 1.0
+            dropout: 0.0
+            decoder_expand: 0
+            idx_cascade: 4
+            bias: false
+            norm: false
+        - class_path: models.backbones.lvupmodem.LvupModem
+          init_args:
+            in_channels: 50
+            out_channels: 50
+            pyramid_channels:
+            - 32
+            - 48
+            - 64
+            - 80
+            prompt_tokens:
+            - 8
+            - 8
+            - 8
+            prompt_channels:
+            - 24
+            - 32
+            - 40
+            prompt_figsize:
+            - 64
+            - 32
+            - 16
+            n_enc_cab:
+            - 2
+            - 3
+            - 3
+            n_dec_cab:
+            - 2
+            - 2
+            - 3
+            n_skip_cab:
+            - 1
+            - 1
+            - 1
+            - 3
+            moe_poolsize: 4
+            moe_top_k: 1
+            gate_class_path: models.modules.nav.RouterCenter
+            gate_init_args:
+              embedding_channels: 1024
+              n_cab: 2
+              cluster: linear
+              prototype_update_interval: null
+              batch_cache_size: 50
+              balance_prior_lambda: 0.0
+              z_loss_coef: 0
+              aux_loss_coef: 0
+              aux_loss_batch_coef: 0.1
+              prob_sparse_loss_coef: 0.05
+              aux_loss_coef_min: 0
+              aux_loss_batch_coef_min: 0.01
+              aux_loss_decay_type: linear
+              aux_loss_step0: 65000
+              aux_loss_stepn: 80000
+              detach: true
+              n_skip: 10000
+              sync_until_step: 65000
+              temp_init: 1.0
+              temp_min: 0.0
+              temp_decay_type: exp
+              temp_decay_steps: 10000
+              temp_gamma: 0.9995
+            kernel_size: 3
+            reduction: 1.0
+            dropout: 0.0
+            decoder_expand: 0
+            idx_cascade: 5
+            bias: false
+            norm: false
+        csmblock_kwargs:
+          crop: true
+        senseblock_kwargs: {}
+    optimizer_class_path: torch.optim.AdamW
+    optimizer_init_kwargs:
+      lr: 0.0002
+      weight_decay: 0.01
+    scheduler_class_path: null
+    scheduler_init_kwargs: {}
+    scheduler_interval: step
+    num_log_images: 16
+    ckpt_path: null
+    ckpt_strict: true
+    fine_tuning: false
+    debug: false
+
+load_weights_only: false
+optimizer: null
+lr_scheduler: null
+ckpt_path: /home/lyy/exp/moero/s4kxqgle/checkpoints/epoch=33-step=105876.ckpt

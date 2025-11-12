@@ -6,7 +6,7 @@ trainer:
   strategy: ddp_find_unused_parameters_true
   check_val_every_n_epoch: 1
   num_nodes: 1
-  max_epochs: 40
+  max_epochs: 60
   log_every_n_steps: 50 # log every n steps during training
   deterministic: false
   use_distributed_sampler: false # Use false because custom VolumeSamplers have been used
@@ -17,7 +17,7 @@ trainer:
       mode: online
       save_dir: /home/lyy/exp
       tags: [moeunet, c6, cmr]
-      name: cmr25-1/4-linear
+      name: cmr25-2/8-linear
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
