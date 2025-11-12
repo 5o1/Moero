@@ -15,7 +15,7 @@ model:
           crop: true
 
         csm_model:
-          class_path: models.backbone.PromptUnet
+          class_path: models.backbones.PromptUnet
           init_args:
             in_channels: 10
             out_channels: 10
@@ -32,7 +32,7 @@ model:
             idx_cascade: null
             
         cascades: 
-          - class_path: models.backbone.PromptUnet
+          - class_path: models.backbones.PromptUnet
             init_args: &cascadebase
               in_channels: 50
               out_channels: 50
@@ -47,25 +47,24 @@ model:
               n_history: 6
               norm: false
               bias: false
-              history_norm: false
               idx_cascade: 0
-          - class_path: models.backbone.PromptUnet
+          - class_path: models.backbones.PromptUnet
             init_args:
               <<: *cascadebase
               idx_cascade: 1
-          - class_path: models.backbone.PromptUnet
+          - class_path: models.backbones.PromptUnet
             init_args:
               <<: *cascadebase
               idx_cascade: 2
-          - class_path: models.backbone.PromptUnet
+          - class_path: models.backbones.PromptUnet
             init_args:
               <<: *cascadebase
               idx_cascade: 3
-          - class_path: models.backbone.PromptUnet
+          - class_path: models.backbones.PromptUnet
             init_args:
               <<: *cascadebase
               idx_cascade: 4
-          - class_path: models.backbone.PromptUnet
+          - class_path: models.backbones.PromptUnet
             init_args:
               <<: *cascadebase
               idx_cascade: 5

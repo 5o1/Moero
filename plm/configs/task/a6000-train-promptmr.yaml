@@ -14,8 +14,8 @@ trainer:
       project: moero
       mode: online
       save_dir: /home/liyy/exp
-      tags: [cmr25lab, moero, c6, fastmri-mini, gpu1, experts1-4]
-      name: moero-6-samech
+      tags: [cmr25lab, promptmr, c6, fastmri-mini, gpu1, epoch32]
+      name: promptmr
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
