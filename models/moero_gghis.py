@@ -84,10 +84,6 @@ class CsmBlock(nn.Module):
 
         masked_image = self.norm(masked_image)
         csm = self.model(masked_image)
-
-        if isinstance(csm, tuple):
-            csm = csm[0]
-
         csm = self.norm.pad_adjoint(csm)
 
         if self.is_crop:
@@ -134,7 +130,8 @@ class SenseBlock(nn.Module):
         img_zf: torch.Tensor,
         mask: torch.Tensor,
         csm: torch.Tensor,
-        latent: torch.Tensor
+        latent: torch.Tensor,
+        history_feat: List[List[torch.Tensor]]
     ):
         """
         complex
@@ -161,7 +158,7 @@ class SenseBlock(nn.Module):
         model_input = torch.cat([model_input, latent], dim=-3)
 
         # Model forward pass
-        model_term = self.model(model_input)
+        model_term, feat_cached = self.model(model_input, history_feat)
 
         model_term = self.norm.adjoint(model_term)
 
@@ -178,13 +175,13 @@ class SenseBlock(nn.Module):
                 register_extra_metric(self, f"dc_weight_max", dc_weight.detach(), op ="max")
                 register_extra_metric(self, f"dc_weight_min", dc_weight.detach(), op ="min")
 
-        return current_img, latent
+        return current_img, latent, feat_cached
 
     def get_model(self) -> torch.nn.Module:
         return self.model
 
 
-class MoeroGG(nn.Module):
+class MoeroGGHis(nn.Module):
     """
     Modular Cascaded Reconstruction Network
 
@@ -261,14 +258,18 @@ class MoeroGG(nn.Module):
         img_zf = self.sens_reduce(masked_kspace, csm)
         img_pred = img_zf.clone()
         latent = img_zf.clone()
+        history_feat = [[] for _ in range(3)]
 
         for cascade_idx, cascade_unit in enumerate(self.cascades):
             try:
-                img_pred, latent  = cascade_unit(img_pred, img_zf, mask, csm, latent)
+                img_pred, latent, feat = cascade_unit(img_pred, img_zf, mask, csm, latent, history_feat)
             except torch.cuda.OutOfMemoryError as e:
                 raise torch.cuda.OutOfMemoryError(
                     f"Out of memory in cascade {cascade_idx}. Input shape = {masked_kspace.shape}. Consider reducing cascades or datasize."
                 ) from e
+
+            for ilevel, level_history in enumerate(history_feat):
+                level_history.append(feat[ilevel])
 
         # Get reduced central slice as final output
         img_pred = img_pred[:, img_pred.size(1) // 2, img_pred.size(2) // 2, ...]
