@@ -29,6 +29,9 @@ class MaskGenerator(torch.nn.Module):
         if rng is None:
             self.rng = torch.Generator()
             self.rng.manual_seed(torch.initial_seed())
+            if torch.cuda.is_available():
+                self.rng_cuda = torch.Generator(device='cuda')
+                self.rng_cuda.manual_seed(torch.initial_seed())
         else:
             self.rng = rng
 
@@ -85,7 +88,7 @@ class KtGaussianMaskGenerator(MaskGenerator):
         self.register_buffer("sigma", torch.as_tensor(sigma))
 
     def gau(self, x: float | torch.Tensor, mean: float | torch.Tensor, std: float | torch.Tensor):
-        return (1 / (torch.sqrt(torch.as_tensor(2) * torch.pi) * std)) * torch.exp(-((x - mean) ** 2) / (2 * std ** 2))
+        return (1 / (torch.sqrt(torch.as_tensor(2, device=self.mu.device) * torch.pi) * std)) * torch.exp(-((x - mean) ** 2) / (2 * std ** 2))
 
     def make_mask(self, size: Sequence[int], accel_factor: float, ncalib: int) -> torch.Tensor:
         batch_size, nshot = size[0], size[self.dimidx_phase]
@@ -106,11 +109,16 @@ class KtGaussianMaskGenerator(MaskGenerator):
         pdf = self.gau((xs / nshot - 0.5), self.mu, self.sigma)
         pdf[acs_start:acs_end] = 0  # Exclude ACS region from Gaussian sampling
 
+        if self.mu.device == torch.device('cpu'):
+            rng = self.rng
+        else:
+            rng = self.rng_cuda
+ 
         # ktdup
         recorded_indices = torch.zeros(pdf.shape, dtype=torch.bool, device=pdf.device)
         for b in range(batch_size):
             # Sample Gaussian indices
-            gau_indices = torch.multinomial(pdf, num_samples=nacq, replacement=False, generator=self.rng)
+            gau_indices = torch.multinomial(pdf, num_samples=nacq, replacement=False, generator=rng)
             already_sampled = recorded_indices[gau_indices]
             for iretry in range(nacq):
                 dup_indices = gau_indices[already_sampled]

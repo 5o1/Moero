@@ -32,7 +32,7 @@ class CsmBlock(nn.Module):
         The input masked_kspace should be a complex tensor of shape (b, ref, adj, coils, h, w).
         The mask should be a float tensor of shape (b, ref, adj, 1, h, w).
     """
-    def __init__(self, model: nn.Module, cropsize_max = 128, cropsize_min = 48, ncalib_mincheck = 8,crop: bool = True):
+    def __init__(self, model: nn.Module, cropsize_max = 128, cropsize_min = 8, ncalib_mincheck = 8,crop: bool = True):
         super().__init__()
         self.cropsize_max = cropsize_max
         self.cropsize_min = cropsize_min
@@ -87,10 +87,10 @@ class CsmBlock(nn.Module):
         masked_image = fft.ktoi(masked_kspace_cropped)
 
         masked_image = self.norm(masked_image)
-        csm, _, wordfreq = self.model(masked_image)
+        csm, _, embedding = self.model(masked_image)
         csm = self.norm.pad_adjoint(csm)
 
-        wordfreq = rearrange(wordfreq, "(b c) words -> b c words", b = masked_kspace.size(0), c = masked_kspace.size(-3)).mean(dim = 1)
+        embedding = rearrange(embedding, "(b c) words -> b c words", b = masked_kspace.size(0), c = masked_kspace.size(-3)).mean(dim = 1)
 
         if self.is_crop:
             csm = interpolate(csm.view(-1, *csm.shape[-3:]), size=masked_kspace.shape[-2:], mode='bilinear', align_corners=False).view(*csm.shape[:-3], -1, *masked_kspace.shape[-2:])
@@ -98,7 +98,7 @@ class CsmBlock(nn.Module):
             
         csm = self.norm.norm_adjoint(csm)
         csm = csm / ((csm.abs()**2).sum(dim=-3, keepdim=True).sqrt() + 1e-13)  # Normalize
-        return csm, wordfreq # (b, t, s, c, h, w), [b c]
+        return csm, embedding # (b, t, s, c, h, w), [b c]
 
 class SenseBlock(nn.Module):
     """
@@ -124,7 +124,7 @@ class SenseBlock(nn.Module):
         self.use_noise = use_noise
 
         self.norm: Format4Unet2d = Format4Unet2d(ndownsample=self.model.depth, is_resize=False)
-        self.dc_weight = nn.Parameter(torch.tensor(1.0, dtype = torch.float32))  # DC weight for the model
+        self.dc_weight = nn.Parameter(torch.tensor(0.5, dtype = torch.float32))  # DC weight for the model
 
         if self.use_noise:
             # self.noise_filter = ComplexGaussianBlur(7, 0.5, is_magnitude=True, is_phase=True)
@@ -168,7 +168,7 @@ class SenseBlock(nn.Module):
             current_img_with_buffer = torch.cat([current_img_with_buffer, noise], dim=-3)
 
         # Model forward pass
-        model_term_with_buffer, feat_cached, wordfreq = self.model(current_img_with_buffer, history_feat)
+        model_term_with_buffer, feat_cached, embedding = self.model(current_img_with_buffer, history_feat)
 
         # Restore from normalization
         model_term_with_buffer = self.norm.adjoint(model_term_with_buffer)
@@ -186,7 +186,7 @@ class SenseBlock(nn.Module):
                 register_extra_metric(self, f"dc_weight_max", dc_weight.detach(), op ="max")
                 register_extra_metric(self, f"dc_weight_min", dc_weight.detach(), op ="min")
 
-        return current_img, latent, feat_cached, wordfreq
+        return current_img, latent, feat_cached, embedding
 
     def get_model(self) -> torch.nn.Module:
         return self.model
@@ -208,10 +208,11 @@ class Moero(nn.Module):
             self,
             csm_model: nn.Module, # id 0
             cascades: List[nn.Module], # id 1 to n_cascades
-            branchnav_class_path: str,
             moe_poolsize: List[int], # number of experts in each cascade
             moe_n_activated: List[int], # number of activated experts for each cascade
             moe_n_recurrent: List[int], # number of recurrent times for each cascade
+            branchnav_class_path: str,
+            branchnav_init_args: dict = {},
             moe_embed_channels: int = 1024, # dimension of the embedding vector
             csmblock_kwargs: dict = {},
             senseblock_kwargs: dict = {}
@@ -244,7 +245,8 @@ class Moero(nn.Module):
                 in_channels = moe_embed_channels,
                 poolsize = moe_poolsize[icascade],
                 top_k = moe_n_activated[icascade],
-                idx = icascade
+                idx = icascade,
+                **branchnav_init_args
             ) for icascade in range(len(cascades))
         ]) # (n_cascades, Branchnav)
     

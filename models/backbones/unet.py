@@ -2,7 +2,7 @@ from typing import List
 import torch
 from torch import nn
 from ..modules.conv import DownBlock, CABChain, UpBlock
-from utils.naneu.helpers.context import register_extra_output
+from utils.naneu.helpers.context import register_extra_output, register_extra_metric
 from utils.naneu.helpers.rearrange import TorchModuleForwardHook # Don't touch this import
 
 
@@ -48,6 +48,7 @@ class Unet(nn.Module):
             kernel_size: int = 3,
             reduction: float | int = 2,
             dropout: float = 0.0,
+            decoder_expand: int = 0,
             idx_cascade: int = None,
             bias: bool = True,
             norm: bool = False,
@@ -86,7 +87,7 @@ class Unet(nn.Module):
 
         # Decoder - 3 UpBlocks
         self.dec = torch.nn.ModuleList([
-            UpBlock(pyramid_channels[i + 1], pyramid_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
+            UpBlock(pyramid_channels[i + 1], pyramid_channels[i], n_dec_cab[i], kernel_size, reduction, dropout, n_history=decoder_expand, norm=norm, bias=bias).rearrange("b ref c h w -> (b ref) c h w")
             for i in range(self.depth)
         ])
 

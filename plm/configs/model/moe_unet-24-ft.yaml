@@ -1,0 +1,118 @@
+model:
+  class_path: plm.models.Cmr25Module
+  init_args:
+    ckpt_path: /home/lyy/exp/moero/32jmwn8y/checkpoints/last.ckpt
+    optimizer_init_kwargs:
+      lr: 0.0002
+      weight_decay: 1e-2
+
+    model:
+      class_path: models.moero_gg.MoeroGG
+      init_args:
+        csmblock_kwargs:
+          crop: true
+
+        csm_model:
+          class_path: models.backbones.Unet
+          init_args:
+            in_channels: 2
+            out_channels: 2
+            pyramid_channels: [4, 8, 12, 16]
+            n_enc_cab: [2, 3, 3]
+            n_dec_cab: [2, 2, 3]
+            n_skip_cab: [1, 1, 1, 3]
+            reduction: 1
+            norm: false
+            bias: false
+            idx_cascade: null
+
+        cascades: 
+          - class_path: models.backbones.Lvup
+            init_args: &cascadebase
+              in_channels: 8
+              out_channels: 8
+              pyramid_channels: [16, 20, 24, 28]
+              prompt_tokens: [8, 8, 8]
+              prompt_channels: [10, 12, 14]
+              prompt_figsize: [64, 32, 16]
+              n_enc_cab: [2, 3, 3]
+              n_dec_cab: [2, 2, 3]
+              n_skip_cab: [1, 1, 1, 3]
+              reduction: 1
+              moe_top_k: 2
+              moe_poolsize: 8
+              gate_class_path: models.modules.nav.FeatExtractBranchNav
+              gate_init_args:
+                pyramid_channels: [32, 64, 128, 256]
+                embedding_channels: 1024
+                cluster: "prototype"
+                batch_cache_size: 20
+                balance_prior_lambda: 0.0
+                z_loss_coef: 1e-3
+                aux_loss_coef: 1e-3
+                aux_loss_batch_coef: 1e-3
+                prob_sparse_loss_coef: 1e-3
+                # aux loss decay settings
+                aux_loss_coef_min: 1e-3
+                aux_loss_batch_coef_min: 1e-3
+                aux_loss_decay_type: linear
+                aux_loss_step0: 20000
+                aux_loss_stepn: 40000
+                detach: true
+                n_skip: 3000
+                # temperature decay settings
+                temp_init:  1.0        # large temperature for near-uniform at early stage
+                temp_min:  0.0         # small temperature for sharp distribution at later stage
+                temp_decay_type: exp
+                temp_decay_steps: 10000 # for linear/cosine
+                temp_gamma: 0.9995    # for exp: tau_t = max(temp_min, temp_init * gamma^t)
+                # control parameter
+                freezed: false
+              # decoder_expand: 6
+              norm: false
+              bias: false
+              idx_cascade: 0
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 1
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 2
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 3
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 4
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 5
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 6
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 7
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 8
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 9
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 10
+          - class_path: models.backbones.Lvup
+            init_args:
+              <<: *cascadebase
+              idx_cascade: 11

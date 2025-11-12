@@ -1,0 +1,41 @@
+data:
+  class_path: plm.datasets.CmrDataModule
+  init_args:
+    num_workers: 16
+
+    train_config:
+      path: /home/liyuyang/datasets/t2/train/
+      dataset_class: &datasetclasspath datasets.CmrDatasetBase
+      dataset_init_args: &traininitargs
+        n_adj_frame: 1
+        n_adj_slice: 1
+        adj_dim: slice  # Options: "frame", "slice"
+        transform: 
+          class_path: datasets.Cmr25TrainingTransform
+          init_args: {
+            acc_factors: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+            n_calibs: [40],
+            mask_weights: {
+                Uniform: 1,
+                ktGaussian: 1,
+                ktRadial: 0,
+            }
+          }
+
+    val_configs:
+
+      - path: /home/liyuyang/datasets/t2/val/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [16],
+              n_calibs: [40],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 0,
+              }
+            }

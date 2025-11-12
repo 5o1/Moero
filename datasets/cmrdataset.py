@@ -96,7 +96,40 @@ class CmrDatasetBase(torch.utils.data.Dataset):
     def set_seed(self, seed: int):
         if self.transform is not None:
             self.transform.set_seed(seed)
-    
+
+    def np_getitem_complex_batch_fast(self, data, *dim_indices):
+        # Normalize indices to 1D arrays
+        idx_list = []
+        for indices in dim_indices:
+            if isinstance(indices, np.ndarray):
+                idx_list.append(indices.reshape(-1))
+            else:
+                idx_list.append(np.asarray(indices).reshape(-1))
+
+        # All dimensions must have the same length for zipped point selection
+        lengths = [len(x) for x in idx_list]
+        if len(set(lengths)) != 1:
+            raise ValueError(f"All index arrays must have the same length for zipped point selection. Got lengths: {lengths}")
+
+        # Build [N, ndim] integer matrix of points
+        pts = np.stack(idx_list, axis=1)  # shape (N, D)
+
+        # Unique points to avoid re-reading duplicates
+        uniq, inv = np.unique(pts, axis=0, return_inverse=True)  # uniq: (K, D), inv: (N,)
+
+        # Fancy indexing (single HDF5 read for point selection)
+        # Tuple of arrays, one per dim, all length K
+        sel = tuple(uniq[:, d] for d in range(uniq.shape[1]))
+        out = data[sel]  # shape (K, ...) where "..." is trailing dataset dims if any
+
+        # Restore original order (including duplicates): shape (N, ...)
+        out_reordered = out[inv]
+
+        if out_reordered.dtype == np.dtype([('real', '<f8'), ('imag', '<f8')]):
+            out_reordered = out_reordered['real'] + 1j * out_reordered['imag']
+
+        return out_reordered
+
     def np_getitem_complex_batch(self, data: np.ndarray, *dim_indices: Sequence) -> dict:
         dim_indices = [indices.flatten().tolist() if isinstance(indices, np.ndarray) else indices for indices in dim_indices]
         seq_indices = list(zip(*dim_indices))
@@ -161,7 +194,7 @@ class CmrDatasetBase(torch.utils.data.Dataset):
 
                 rss = self.np_getitem_complex(rss, ti, zi)
                 self._check_data(rss, (ti, zi), fname)
-                rss = torch.as_tensor(rss)
+                rss = torch.as_tensor(rss).squeeze(0)
                 if rss.ndim != 2:
                     raise ValueError("Ndim of RSS img must be 2.")
                 rss = rss.unsqueeze(0) # 1 h w
@@ -175,18 +208,18 @@ class CmrDatasetBase(torch.utils.data.Dataset):
 
                 adj_sis = self._get_indices(zi, nslice, self.n_adj_slice, pad=self.slice_padding)
 
-                kdata = self.np_getitem_complex_batch(kspace, adj_sis)
+                kdata = self.np_getitem_complex_batch_fast(kspace, adj_sis)
                 self._check_data(kdata, adj_sis, fname)
                 
                 kdata = rearrange(kdata, "s c h w -> 1 s c h w", s = len(adj_sis))
                 kdata = torch.as_tensor(kdata)
                 kdata = kdata.expand((n_adj_frame, -1, -1, -1, -1))  # Expand to match n_adj_frame
-                
-                rss = self.np_getitem_complex(rss, zi)
+
+                rss = self.np_getitem_complex_batch_fast(rss, zi)
                 self._check_data(rss, adj_sis, fname)
-                rss = torch.as_tensor(rss)
+                rss = torch.as_tensor(rss).squeeze(0)
                 if rss.ndim != 2:
-                    raise ValueError("Ndim of RSS img must be 2.")
+                    raise ValueError(f"Ndim of RSS img must be 2, got {rss.ndim}.")
                 rss = rss.unsqueeze(0) # 1 h w
             else:
                 raise ValueError(f"Unsupported idx formats: {fname} with sliceidx {seqidx}")
@@ -202,9 +235,16 @@ class CmrDatasetBase(torch.utils.data.Dataset):
             seqshape = seqshape,
         )
 
+        if self.adj_dim == "slice":  # transpose t s
+            sample.masked_kspace = rearrange(sample.masked_kspace, "t s c h w -> s t c h w")
+
         if self.transform is not None:
             with torch.no_grad():
                 sample = self.transform(sample)
+
+        if self.adj_dim == "slice":  # transpose t s
+            sample.masked_kspace = rearrange(sample.masked_kspace, "s t c h w -> t s c h w")
+            sample.mask = rearrange(sample.mask, "s t c h w -> t s c h w")
 
         if self.adj_dim == "frame":  # transpose t s
             sample.masked_kspace = rearrange(sample.masked_kspace, "t s c h w -> s t c h w")

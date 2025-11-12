@@ -11,3 +11,11 @@ from .embedoutunet import (
 from .unet import (
     Unet
 )
+
+from .lvup import (
+    Lvup
+)
+
+from .lvupml import (
+    LvupMultiLevel
+)

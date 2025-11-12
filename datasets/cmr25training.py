@@ -10,6 +10,11 @@ class MixedRandomMaskGenerator(torch.nn.Module):
             self,
             acc_factors: List[int] = [2, 4, 8, 12, 16, 20, 24],
             n_calibs: List[int] = [16, 20],
+            mask_weights: dict = {
+                "Uniform": 1,
+                "ktGaussian": 1,
+                "ktRadial": 1,
+            }
     ):
         super().__init__()
         self.rng = torch.Generator()
@@ -19,16 +24,14 @@ class MixedRandomMaskGenerator(torch.nn.Module):
             KtGaussianMaskGenerator(accel_factors=acc_factors, ncalibs = n_calibs, rng = self.rng),
             KtRadialMaskGenerator(accel_factors=acc_factors, ncalibs = n_calibs, rng = self.rng),
         ]
-        self.maskgen_weights = torch.as_tensor([
-            1,
-            1,
-            1,
-        ], dtype=torch.float32)
         self.masktype_pool = [
             "Uniform",
             "ktGaussian",
             "ktRadial"
         ]
+
+        self.maskgen_weights = torch.as_tensor([mask_weights[masktype] for masktype in self.masktype_pool], dtype=torch.float32)
+
     def set_seed(self, seed: int):
         self.rng.manual_seed(seed)
 
@@ -47,9 +50,14 @@ class Cmr25TrainingTransform(torch.nn.Module):
             self,
             acc_factors: List[int] = [2, 4, 8, 12, 16, 20, 24],
             n_calibs: List[int] = [16, 20],
+            mask_weights: dict = {
+                "Uniform": 1,
+                "ktGaussian": 1,
+                "ktRadial": 1,
+            }
             ):
         super().__init__()
-        self.maskgen = MixedRandomMaskGenerator(acc_factors, n_calibs)
+        self.maskgen = MixedRandomMaskGenerator(acc_factors, n_calibs, mask_weights)
 
     def set_seed(self, seed: int):
         self.maskgen.set_seed(seed)

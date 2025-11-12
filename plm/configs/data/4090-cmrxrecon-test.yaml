@@ -1,0 +1,160 @@
+data:
+  class_path: plm.datasets.CmrDataModule
+  init_args:
+    num_workers: 8
+
+    train_config:
+      path: /home/lyy/dataset/cmr25/train-550/
+      dataset_class: &datasetclasspath datasets.CmrDatasetBase
+      dataset_init_args: &traininitargs
+        n_adj_frame: 5
+        n_adj_slice: 1
+        adj_dim: frame  # Options: "frame", "slice"
+        transform: 
+          class_path: datasets.Cmr25TrainingTransform
+          init_args: {
+            acc_factors: [8, 12, 16, 20, 24],
+            n_calibs: [20],
+            mask_weights: {
+                Uniform: 1,
+                ktGaussian: 1,
+                ktRadial: 1,
+            }
+          }
+
+    val_configs:
+      - path: /home/lyy/dataset/cmr25/test-BlackBlood/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [24],
+              n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 1,
+              }
+            }
+      - path: /home/lyy/dataset/cmr25/test-Cine/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [24],
+              n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 1,
+              }
+            }
+      - path: /home/lyy/dataset/cmr25/test-Flow2d/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [24],
+              n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 1,
+              }
+            }
+      - path: /home/lyy/dataset/cmr25/test-LGE/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [24],
+              n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 1,
+              }
+            }
+      - path: /home/lyy/dataset/cmr25/test-Mapping/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [24],
+              n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 1,
+              }
+            }
+      - path: /home/lyy/dataset/cmr25/test-Perfusion/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [24],
+              n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 1,
+              }
+            }
+      - path: /home/lyy/dataset/cmr25/test-T1rho/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [24],
+              n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 1,
+              }
+            }
+      - path: /home/lyy/dataset/cmr25/test-T1w/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [24],
+              n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 1,
+              }
+            }
+      - path: /home/lyy/dataset/cmr25/test-T2w/
+        dataset_class: *datasetclasspath
+        dataset_init_args:
+          <<: *traininitargs
+          transform: 
+            class_path: datasets.Cmr25TrainingTransform
+            init_args: {
+              acc_factors: [24],
+              n_calibs: [20],
+              mask_weights: {
+                  Uniform: 1,
+                  ktGaussian: 1,
+                  ktRadial: 1,
+              }
+            }

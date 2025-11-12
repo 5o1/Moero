@@ -67,24 +67,24 @@ class Cmr25Module(MriModule):
                 output, target, batch.datarange
             )
 
-            self.log("train/loss", loss.detach(), prog_bar=True)
+            self.log("train/loss", loss.detach(), prog_bar=True, batch_size=batch.masked_kspace.size(0))
 
             total_loss = loss
             if len(ctx_loss_dict:= ctx.get_losses()) > 0:
                 for loss_name, loss_score in ctx_loss_dict.items():
                     total_loss += loss_score
-                    self.log(f"train/{loss_name}", loss_score.detach(), prog_bar=True)
+                    self.log(f"train/{loss_name}", loss_score.detach(), prog_bar=True, batch_size=batch.masked_kspace.size(0))
                     
             if self.fine_tuning:
                 vgg_loss = self.perceptual_fn(output, target)
                 total_loss += vgg_loss
-                self.log("train/vgg_loss", vgg_loss.detach(), prog_bar=True)
+                self.log("train/vgg_loss", vgg_loss.detach(), prog_bar=True, batch_size=batch.masked_kspace.size(0))
 
-            self.log("train/total_loss", total_loss.detach(), prog_bar=True)
+            self.log("train/total_loss", total_loss.detach(), prog_bar=True, batch_size=batch.masked_kspace.size(0))
 
             if len(ctx_metric_dict:= ctx.get_metrics()) > 0:
                 for metric_name, metric_score in ctx_metric_dict.items():
-                    self.log(f"train/{metric_name}", metric_score.detach(), prog_bar=True)
+                    self.log(f"train/{metric_name}", metric_score.detach(), prog_bar=True, batch_size=batch.masked_kspace.size(0))
 
         return total_loss
 
@@ -109,11 +109,16 @@ class Cmr25Module(MriModule):
 
             if len(ctx_loss_dict:= ctx.get_losses()) > 0:
                 for loss_name, loss_score in ctx_loss_dict.items():
-                    self.log(f"val/{loss_name}", loss_score.detach(), prog_bar=True, sync_dist=True, on_epoch=True)
+                    self.log(f"val/{loss_name}", loss_score.detach(), prog_bar=True, sync_dist=True, batch_size=batch.masked_kspace.size(0))
             
             if len(ctx_metric_dict:= ctx.get_metrics()) > 0:
                 for metric_name, metric_score in ctx_metric_dict.items():
-                    self.log(f"val/{metric_name}", metric_score.detach(), prog_bar=True, sync_dist=True, on_epoch=True)
+                    self.log(f"val/{metric_name}", metric_score.detach(), prog_bar=True, sync_dist=True, batch_size=batch.masked_kspace.size(0))
+
+            # output_d = ctx.get_outputs()
+            # if "route_weight" in output_d:
+            #     with open("/home/lyy/moero/route.txt", "a") as f:
+            #         f.write(f"{batch.fname[0]} {batch.seqidx.tolist()} " + " ".join([str(v) for v in output_d["route_weight"].view(-1).tolist()]) + "\n")
 
         return CmrValidationOutputSample(
             img_pred=output,

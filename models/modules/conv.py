@@ -51,12 +51,14 @@ class UpBlock(nn.Module):
                 nn.Conv2d(in_channels * (n_history + 1), in_channels, kernel_size=1, padding="same", bias = bias),
                 CAB(in_channels, kernel_size, reduction, dropout, norm = norm, bias = bias)
             )
+        
+        self.conv = CABChain(in_channels, n_cab, kernel_size, reduction, dropout, norm = norm, bias = bias)
 
         self.up = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
             nn.Conv2d(in_channels, out_channels, kernel_size=1, bias = bias)
             )
-        self.conv = CABChain(out_channels, n_cab, kernel_size, reduction, dropout, norm = norm, bias = bias)
+        self.to_out = CAB(out_channels, kernel_size, reduction, dropout, norm = norm, bias = bias)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor, history: Optional[torch.Tensor] = None) -> torch.Tensor:
         if self.n_history > 0:
@@ -67,10 +69,11 @@ class UpBlock(nn.Module):
             else:
                 x = torch.cat([x, history], dim=-3)
             x = self.momentum(x)
+        x = self.conv(x)
         x = self.up(x)
         x = x + skip
         x *= 0.5
-        x = self.conv(x)
+        x = self.to_out(x)
         return x
                                 
 
@@ -201,11 +204,12 @@ class CAB(nn.Module):
 
 class CABChain(nn.Module):
     def __init__(
-            self, in_channels: int, n_cab: int, kernel_size: int, reduction: int, dropout: float,
+            self, in_channels: int, n_cab: int, kernel_size: int, reduction: int, dropout: float, is_res: bool = False,
             *,
             norm: bool = True, bias: bool = True
         ):
         super().__init__()
+        self.is_res = is_res
         if n_cab == 0:
             self.layer = nn.Identity()
         else:
@@ -215,7 +219,13 @@ class CABChain(nn.Module):
                 ])
 
     def forward(self, x: torch.Tensor)-> torch.Tensor:
-        res = self.layer(x)
+        if self.is_res:
+            res = self.layer(x)
+            res += x
+            res *= 0.5
+            return res
+        else:
+            res = self.layer(x)
         return res
 
 
@@ -249,3 +259,4 @@ class ResChain(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = self.layer(x)
         return res
+    

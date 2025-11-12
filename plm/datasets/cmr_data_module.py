@@ -66,7 +66,7 @@ class CmrDataModule(pl.LightningDataModule):
     def _create_dataloader(
         self,
         dataset: torch.utils.data.Dataset,
-        task: Literal["train", "val"] = "train",
+        task: Literal["train", "val", "predict"] = "train",
     ) -> torch.utils.data.DataLoader:
         # Setting the distributed sampler if available
         sampler = None
@@ -105,6 +105,9 @@ class CmrDataModule(pl.LightningDataModule):
     
     def val_dataloader(self):
         return [self._create_dataloader(dataset, task = "val") for dataset in self.valsets]
+    
+    def predict_dataloader(self):
+        return [self._create_dataloader(dataset, task = "predict") for dataset in self.valsets]
     
 
 class CmrInferenceDataModule(CmrDataModule):
